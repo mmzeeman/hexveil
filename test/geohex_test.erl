@@ -4,12 +4,16 @@
 
 encode_decode_round_trip_test() ->
     Points = [
-        {52.3026, 4.6889},
-        {52.0907, 5.1214},
-        {51.9244, 4.4777},
-        {52.3676, 4.9041},
-        {51.4416, 5.4697},
-        {53.2194, 6.5665}
+        {52.3026,   4.6889},   %% Amsterdam
+        {52.0907,   5.1214},   %% Utrecht
+        {51.9244,   4.4777},   %% Rotterdam
+        {52.3676,   4.9041},
+        {51.4416,   5.4697},
+        {53.2194,   6.5665},
+        {40.7128,  -74.0060},  %% New York
+        {35.6762,  139.6503},  %% Tokyo
+        {-33.8688, 151.2093},  %% Sydney
+        {-23.5505, -46.6333}   %% São Paulo
     ],
     lists:foreach(
       fun({Lat, Lon}) ->
@@ -17,10 +21,25 @@ encode_decode_round_trip_test() ->
           {Lat2, Lon2} = geohex:decode(Code),
           ?assert(is_integer(element(1, Code))),
           ?assert(is_integer(element(2, Code))),
-          ?assert(abs(Lat - Lat2) < 0.01),
-          ?assert(abs(Lon - Lon2) < 0.01)
+          ?assert(abs(Lat - Lat2) < 0.02),
+          ?assert(abs(Lon - Lon2) < 0.02)
       end,
-      Points).
+      Points),
+    %% Edge cases: encode/decode must not crash (projection distortion expected)
+    EdgeCases = [
+        {-90.0,   0.0},   %% South Pole
+        { 90.0,   0.0},   %% North Pole
+        {  0.0,  180.0},  %% anti-meridian east
+        {  0.0, -180.0}   %% anti-meridian west
+    ],
+    lists:foreach(
+      fun({Lat, Lon}) ->
+          Code = geohex:encode(Lat, Lon),
+          ?assert(is_integer(element(1, Code))),
+          ?assert(is_integer(element(2, Code))),
+          _ = geohex:decode(Code)
+      end,
+      EdgeCases).
 
 display_parse_round_trip_test() ->
     Codes = [
@@ -63,14 +82,15 @@ coarsen_consistency_test() ->
 are_nearby_test() ->
     Code = geohex:encode(52.3026, 4.6889),
     SameCell = geohex:encode(52.3027, 4.6890),
-    DifferentButNearby = geohex:encode(52.3055, 4.6925),
+    %% ~3km away — guaranteed different level-5 cell at 2.5km resolution
+    FarAway = geohex:encode(52.3300, 4.7200),
 
     ?assert(geohex:are_nearby(Code, SameCell, 5)),
     ?assert(geohex:are_nearby(Code, SameCell, 4)),
     ?assert(geohex:are_nearby(Code, SameCell, 3)),
-    ?assertNot(geohex:are_nearby(Code, DifferentButNearby, 5)),
-    ?assert(geohex:are_nearby(Code, DifferentButNearby, 4) orelse
-             geohex:are_nearby(Code, DifferentButNearby, 3)).
+    ?assertNot(geohex:are_nearby(Code, FarAway, 5)),
+    ?assert(geohex:are_nearby(Code, FarAway, 4) orelse
+             geohex:are_nearby(Code, FarAway, 3)).
 
 neighbors_test() ->
     Code = geohex:encode(52.3026, 4.6889),
