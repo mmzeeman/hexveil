@@ -6,6 +6,11 @@
 %%
 %% Each level is exactly 2 times coarser (linearly) than the one below it.
 %% This is an Aperture 4 hierarchy (Area x 4 per level). No rotation.
+%%
+%% Code format:
+%%   {Q, R} integers at level 24 (finest).
+%%   display/2 renders as an interleaved Hexadecimal string (0-F).
+%%   Each character represents TWO levels (4 bits: Qn Rn Qn+1 Rn+1).
 
 -module(geohex).
 
@@ -39,9 +44,9 @@
 -define(M_PER_DEG_LAT, 111319.49).
 -define(M_PER_DEG_LON, 111319.49).
 
-%% Use an offset of 2^24 to ensure bits align perfectly with Level 24.
--define(Q_OFF, 16777216).
--define(R_OFF, 16777216).
+%% Offset of 2^23 centers the 24-bit grid globally (~40,265km range).
+-define(Q_OFF, 8388608).
+-define(R_OFF, 8388608).
 -define(DIRECTIONS, [{1,0},{0,1},{-1,1},{-1,0},{0,-1},{1,-1}]).
 
 %% ---------------------------------------------------------------------------
@@ -81,31 +86,27 @@ cell_bounds(Code) ->
 display(Code) -> display(Code, ?MAX_LEVEL).
 
 display({Q, R}, Level) ->
-    %% Force Q and R into 25-bit bitstrings (2^24 + offset).
-    MasterBits = interleave_canonical(<<Q:25>>, <<R:25>>, <<>>),
+    %% Interleave the 24 bits of the encoded (offset) coordinates.
+    Bits = interleave_bits(<<Q:24>>, <<R:24>>, <<>>),
     Required = Level * 2,
-    %% Skip the top bits of the offset (first 2 bits of the 25-bit string).
-    <<_OffsetBits:2, Body:Required/bits, _/bits>> = MasterBits,
-    bits_to_hex(Body, <<>>).
+    <<Prefix:Required/bits, _/bits>> = Bits,
+    bits_to_hex(Prefix, <<>>).
 
 parse(S) ->
-    Bits = hex_to_bits_canonical(S, <<>>),
+    Bits = hex_to_bits(S, <<>>),
     Level = bit_size(Bits) div 2,
-    {Qp, Rp} = deinterleave_canonical(Bits, 0, 0),
-    %% Re-apply the offset correctly for Level L.
-    OffShift = ?MAX_LEVEL - Level,
-    Q_Off_L = ?Q_OFF bsr OffShift,
-    R_Off_L = ?R_OFF bsr OffShift,
+    {Qp, Rp} = deinterleave_bits(Bits, 0, 0),
+    %% Return the level-24 representation of the coarsened cell.
     Shift = ?MAX_LEVEL - Level,
-    {(Qp + Q_Off_L) bsl Shift, (Rp + R_Off_L) bsl Shift}.
+    {Qp bsl Shift, Rp bsl Shift}.
 
 %% ---------------------------------------------------------------------------
-%% Canonical Bit Manipulation (internal)
+%% Bit Interleaving (internal)
 %% ---------------------------------------------------------------------------
 
-interleave_canonical(<<Q:1, QRest/bits>>, <<R:1, RRest/bits>>, Acc) ->
-    interleave_canonical(QRest, RRest, <<Acc/bits, Q:1, R:1>>);
-interleave_canonical(<<>>, <<>>, Acc) -> Acc.
+interleave_bits(<<Q:1, QRest/bits>>, <<R:1, RRest/bits>>, Acc) ->
+    interleave_bits(QRest, RRest, <<Acc/bits, Q:1, R:1>>);
+interleave_bits(<<>>, <<>>, Acc) -> Acc.
 
 bits_to_hex(<<V:4, Rest/bits>>, Acc) ->
     bits_to_hex(Rest, <<Acc/binary, (hex_char(V))/binary>>);
@@ -116,24 +117,24 @@ bits_to_hex(<<>>, Acc) -> Acc.
 hex_char(V) when V < 10 -> <<($0 + V)>>;
 hex_char(V) -> <<($A + V - 10)>>.
 
-hex_to_bits_canonical(<<C:1/binary, Rest/binary>>, Acc) when byte_size(Rest) > 0 ->
+hex_to_bits(<<C:1/binary, Rest/binary>>, Acc) when byte_size(Rest) > 0 ->
     Val = hex_val(C),
-    hex_to_bits_canonical(Rest, <<Acc/bits, Val:4>>);
-hex_to_bits_canonical(<<C:1/binary>>, Acc) ->
+    hex_to_bits(Rest, <<Acc/bits, Val:4>>);
+hex_to_bits(<<C:1/binary>>, Acc) ->
     Val = hex_val(C),
+    %% In our system, odd levels result in 2-bit residual characters.
     if Val > 3 -> <<Acc/bits, Val:4>>;
        true    -> <<Acc/bits, Val:2>>
     end;
-hex_to_bits_canonical(<<>>, Acc) -> Acc.
+hex_to_bits(<<>>, Acc) -> Acc.
 
 hex_val(<<C>>) when C >= $0, C =< $9 -> C - $0;
 hex_val(<<C>>) when C >= $A, C =< $F -> C - $A + 10;
 hex_val(<<C>>) when C >= $a, C =< $f -> C - $a + 10.
 
-deinterleave_canonical(<<Q:1, R:1, Rest/bits>>, QAcc, RAcc) ->
-    deinterleave_canonical(Rest, (QAcc bsl 1) bor Q, (RAcc bsl 1) bor R);
-deinterleave_canonical(<<>>, QAcc, RAcc) ->
-    {QAcc, RAcc}.
+deinterleave_bits(<<QBit:1, RBit:1, Rest/bits>>, Q, R) ->
+    deinterleave_bits(Rest, (Q bsl 1) bor QBit, (R bsl 1) bor RBit);
+deinterleave_bits(<<>>, Q, R) -> {Q, R}.
 
 %% ---------------------------------------------------------------------------
 %% Geometry (internal)

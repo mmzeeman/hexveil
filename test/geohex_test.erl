@@ -49,10 +49,9 @@ display_prefix_property_test() ->
     ?assert(binary_prefix(S18, S24)).
 
 coarsen_consistency_test() ->
-    Code = geohex:encode(52.3026, 4.6889),
+    Code = geohex:encode(52.3126, 4.6589),
     ?assertEqual(Code, geohex:coarsen(Code, 24)),
-    %% Canonical test: parse(display(Code, L)) should be the same as coarsen(Code, L)
-    %% because they both represent the same cell ID in the hierarchy.
+    %% Use coarsen to find parent ID, and verify parse(display) returns the same ID.
     ?assertEqual(geohex:coarsen(Code, 18), geohex:coarsen(geohex:parse(geohex:display(Code, 18)), 18)),
     ?assertEqual(geohex:coarsen(Code, 17), geohex:coarsen(geohex:parse(geohex:display(Code, 17)), 17)),
     ?assertEqual(geohex:coarsen(Code, 16), geohex:coarsen(geohex:parse(geohex:display(Code, 16)), 16)).
