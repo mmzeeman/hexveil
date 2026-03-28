@@ -4,6 +4,9 @@
 %% Optimized for "Human Scale" landmarks (~2.4m) and "Smooth Privacy" steps.
 %% This implementation uses 24 levels of precision.
 %%
+%% Each level is exactly 2 times coarser (linearly) than the one below it.
+%% This is an Aperture 4 hierarchy (Area x 4 per level). No rotation.
+%%
 %% Cell sizes (flat-to-flat, pointy-top hex):
 %%   Level 24: ~2.4m       — Meeting point / Bench (finest)
 %%   Level 22: ~9.6m       — Building entrance
@@ -43,7 +46,7 @@
 %%   De Dam, Amsterdam    | 6CEC50FBAC1 | 6CEC50FBA   | 6CEC50FB2   | 6CEC50FB    | 6CEC50
 %%   De Dom, Utrecht      | 6CEC632CA90 | 6CEC632CA   | 6CEC632C2   | 6CEC632C    | 6CEC63
 %%
-%% Projection: pointy-top hex, equirectangular, centred on (0.0, 0.0).
+%% Projection: pointy-top hex, sinusoidal (Lon scaled by cos(Lat)).
 %% Coverage: Global.
 
 -module(hexveil).
@@ -51,10 +54,12 @@
 -export([
     encode/2,
     decode/1,
+    decode/2,
     are_nearby/3,
     coarsen/2,
     neighbors/1,
     cell_bounds/1,
+    cell_bounds/2,
     cell_geometry/1,
     cell_geometry/2,
     display/1,
@@ -78,9 +83,8 @@
 -define(REF_LAT,  0.0).
 -define(REF_LON,  0.0).
 -define(M_PER_DEG_LAT, 111319.49).
--define(M_PER_DEG_LON, 111319.49).
 
-%% Offset of 2^23 centers the 24-bit grid globally (~40,265km range).
+%% Offset centers the 24-bit grid globally (~40,265km range).
 -define(Q_OFF, 8388608).
 -define(R_OFF, 8388608).
 -define(DIRECTIONS, [{1,0},{0,1},{-1,1},{-1,0},{0,-1},{1,-1}]).
@@ -95,8 +99,20 @@ encode(Lat, Lon) ->
     {Q,  R}  = hex_round(Qf, Rf),
     {Q + ?Q_OFF, R + ?R_OFF}.
 
-decode({Q, R}) ->
-    {X, Y} = axial_to_xy(Q - ?Q_OFF + 0.5, R - ?R_OFF + 0.5),
+decode({Q, R}) -> decode({Q, R}, ?MAX_LEVEL).
+
+%% @doc Decode a code to {Lat, Lon} at the centre of its cell at the given level.
+-spec decode(code(), level()) -> {float(), float()}.
+decode({Q, R}, Level) ->
+    Shift = ?MAX_LEVEL - Level,
+    {Qc, Rc} = if Shift == 0 -> {Q - ?Q_OFF + 0.5, R - ?R_OFF + 0.5};
+                  true ->
+                      Q_base = (Q bsr Shift) bsl Shift,
+                      R_base = (R bsr Shift) bsl Shift,
+                      Center = 1 bsl (Shift - 1),
+                      {Q_base - ?Q_OFF + Center, R_base - ?R_OFF + Center}
+               end,
+    {X, Y} = axial_to_xy(Qc, Rc),
     xy_to_latlon(X, Y).
 
 are_nearby({Q1, R1}, {Q2, R2}, Level) ->
@@ -111,11 +127,16 @@ coarsen({Q, R}, Level) ->
 neighbors({Q, R}) ->
     [{Q + DQ, R + DR} || {DQ, DR} <- ?DIRECTIONS].
 
-cell_bounds(Code) ->
-    {CLat, CLon} = decode(Code),
-    Half    = 1.2,
+cell_bounds(Code) -> cell_bounds(Code, ?MAX_LEVEL).
+
+%% @doc Approximate bounding box {MinLat, MinLon, MaxLat, MaxLon} at the given level.
+-spec cell_bounds(code(), level()) -> {float(), float(), float(), float()}.
+cell_bounds(Code, Level) ->
+    {CLat, CLon} = decode(Code, Level),
+    %% Radius at Level 24 is 1.2m. Scale by 2x per level.
+    Half = 1.2 * math:pow(2, ?MAX_LEVEL - Level),
     HalfLat = Half / ?M_PER_DEG_LAT,
-    HalfLon = Half / ?M_PER_DEG_LON,
+    HalfLon = Half / (?M_PER_DEG_LAT * math:cos(CLat * math:pi() / 180.0)),
     {CLat - HalfLat, CLon - HalfLon,
      CLat + HalfLat, CLon + HalfLon}.
 
@@ -126,7 +147,8 @@ cell_geometry(Code) -> cell_geometry(Code, ?MAX_LEVEL).
 %% @doc Return the 6 corner coordinates {Lat, Lon} of a cell at the given level.
 -spec cell_geometry(code(), level()) -> [{float(), float()}].
 cell_geometry({Q, R}, Level) ->
-    {CX, CY} = axial_to_xy(Q - ?Q_OFF + 0.5, R - ?R_OFF + 0.5),
+    {CLat, CLon} = decode({Q, R}, Level),
+    {CX, CY} = latlon_to_xy(CLat, CLon),
     BaseRadius = ?BQ_X / math:sqrt(3.0),
     Radius = BaseRadius * math:pow(2, ?MAX_LEVEL - Level),
     Angles = [30, 90, 150, 210, 270, 330],
@@ -138,67 +160,54 @@ cell_geometry({Q, R}, Level) ->
 display(Code) -> display(Code, ?MAX_LEVEL).
 
 display({Q, R}, Level) ->
-    %% Interleave the 24 bits of the encoded (offset) coordinates.
     Bits = interleave_bits(<<Q:24>>, <<R:24>>, <<>>),
-    Required = Level * 2,
-    <<Prefix:Required/bits, _/bits>> = Bits,
-    bits_to_hex(Prefix, <<>>).
+    BitLen = Level * 2,
+    <<Prefix:BitLen/bitstring, _/bitstring>> = Bits,
+    PadLen = (8 - (BitLen rem 8)) rem 8,
+    Padded = <<Prefix/bitstring, 0:PadLen>>,
+    Hex = binary:encode_hex(Padded),
+    CharLen = (BitLen + 3) div 4,
+    binary:part(Hex, 0, CharLen).
 
 parse(S) ->
-    Bits = hex_to_bits(S, <<>>),
-    Level = bit_size(Bits) div 2,
+    CharLen = byte_size(S),
+    PaddedS = if CharLen rem 2 =:= 0 -> S; true -> <<S/binary, "0">> end,
+    Bin = binary:decode_hex(PaddedS),
+    LastChar = binary:last(S),
+    IsOdd = (LastChar >= $0 andalso LastChar =< $3),
+    BitLen = if IsOdd -> (CharLen * 4) - 2; true -> CharLen * 4 end,
+    <<Bits:BitLen/bitstring, _/bitstring>> = Bin,
     {Qp, Rp} = deinterleave_bits(Bits, 0, 0),
-    %% Return the level-24 representation of the coarsened cell.
-    Shift = ?MAX_LEVEL - Level,
+    ActualLevel = BitLen div 2,
+    Shift = ?MAX_LEVEL - ActualLevel,
     {Qp bsl Shift, Rp bsl Shift}.
 
 %% ---------------------------------------------------------------------------
 %% Bit Interleaving (internal)
 %% ---------------------------------------------------------------------------
 
-interleave_bits(<<Q:1, QRest/bits>>, <<R:1, RRest/bits>>, Acc) ->
-    interleave_bits(QRest, RRest, <<Acc/bits, Q:1, R:1>>);
+interleave_bits(<<Q:1, QRest/bitstring>>, <<R:1, RRest/bitstring>>, Acc) ->
+    interleave_bits(QRest, RRest, <<Acc/bitstring, Q:1, R:1>>);
 interleave_bits(<<>>, <<>>, Acc) -> Acc.
 
-bits_to_hex(<<V:4, Rest/bits>>, Acc) ->
-    bits_to_hex(Rest, <<Acc/binary, (hex_char(V))/binary>>);
-bits_to_hex(<<V:2, Rest/bits>>, Acc) ->
-    bits_to_hex(Rest, <<Acc/binary, (hex_char(V))/binary>>);
-bits_to_hex(<<>>, Acc) -> Acc.
-
-hex_char(V) when V < 10 -> <<($0 + V)>>;
-hex_char(V) -> <<($A + V - 10)>>.
-
-hex_to_bits(<<C:1/binary, Rest/binary>>, Acc) when byte_size(Rest) > 0 ->
-    Val = hex_val(C),
-    hex_to_bits(Rest, <<Acc/bits, Val:4>>);
-hex_to_bits(<<C:1/binary>>, Acc) ->
-    Val = hex_val(C),
-    %% In our system, odd levels result in 2-bit residual characters.
-    if Val > 3 -> <<Acc/bits, Val:4>>;
-       true    -> <<Acc/bits, Val:2>>
-    end;
-hex_to_bits(<<>>, Acc) -> Acc.
-
-hex_val(<<C>>) when C >= $0, C =< $9 -> C - $0;
-hex_val(<<C>>) when C >= $A, C =< $F -> C - $A + 10;
-hex_val(<<C>>) when C >= $a, C =< $f -> C - $a + 10.
-
-deinterleave_bits(<<QBit:1, RBit:1, Rest/bits>>, Q, R) ->
-    deinterleave_bits(Rest, (Q bsl 1) bor QBit, (R bsl 1) bor RBit);
-deinterleave_bits(<<>>, Q, R) -> {Q, R}.
+deinterleave_bits(<<Q:1, R:1, Rest/bitstring>>, QAcc, RAcc) ->
+    deinterleave_bits(Rest, (QAcc bsl 1) bor Q, (RAcc bsl 1) bor R);
+deinterleave_bits(<<>>, QAcc, RAcc) ->
+    {QAcc, RAcc}.
 
 %% ---------------------------------------------------------------------------
 %% Geometry (internal)
 %% ---------------------------------------------------------------------------
 
 latlon_to_xy(Lat, Lon) ->
-    {(Lon - ?REF_LON) * ?M_PER_DEG_LON,
+    CosLat = math:cos(Lat * math:pi() / 180.0),
+    {(Lon - ?REF_LON) * ?M_PER_DEG_LAT * CosLat,
      (Lat - ?REF_LAT) * ?M_PER_DEG_LAT}.
 
 xy_to_latlon(X, Y) ->
-    {?REF_LAT + Y / ?M_PER_DEG_LAT,
-     ?REF_LON + X / ?M_PER_DEG_LON}.
+    Lat = ?REF_LAT + Y / ?M_PER_DEG_LAT,
+    CosLat = math:cos(Lat * math:pi() / 180.0),
+    {Lat, ?REF_LON + X / (?M_PER_DEG_LAT * CosLat)}.
 
 xy_to_axial(X, Y) ->
     Rf = Y / (1.5 * ?R),
