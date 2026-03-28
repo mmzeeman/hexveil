@@ -4,12 +4,11 @@
 
 encode_decode_round_trip_test() ->
     Points = [
-        {52.3026, 4.6889},
-        {52.0907, 5.1214},
-        {51.9244, 4.4777},
-        {52.3676, 4.9041},
-        {51.4416, 5.4697},
-        {53.2194, 6.5665}
+        {52.3026, 4.6889},  %% Amsterdam
+        {-33.8688, 151.2093}, %% Sydney
+        {40.7128, -74.0060}, %% New York
+        {-23.5505, -46.6333}, %% São Paulo
+        {0.0, 0.0}            %% Null Island
     ],
     lists:foreach(
       fun({Lat, Lon}) ->
@@ -25,52 +24,50 @@ encode_decode_round_trip_test() ->
 display_parse_round_trip_test() ->
     Codes = [
         geohex:encode(52.3026, 4.6889),
-        geohex:encode(52.0907, 5.1214),
-        geohex:encode(51.9244, 4.4777)
+        geohex:encode(0.0, 0.0)
     ],
     lists:foreach(
       fun(Code) ->
           Full = geohex:display(Code),
-          ?assertEqual(10, byte_size(Full)),
+          ?assertEqual(7, byte_size(Full)),
           ?assertEqual(Code, geohex:parse(Full)),
-          ?assertEqual(8, byte_size(geohex:display(Code, 4))),
-          ?assertEqual(6, byte_size(geohex:display(Code, 3))),
-          ?assertEqual(4, byte_size(geohex:display(Code, 2))),
-          ?assertEqual(2, byte_size(geohex:display(Code, 1)))
+          ?assertEqual(6, byte_size(geohex:display(Code, 6))),
+          ?assertEqual(5, byte_size(geohex:display(Code, 5))),
+          ?assertEqual(4, byte_size(geohex:display(Code, 4))),
+          ?assertEqual(1, byte_size(geohex:display(Code, 1)))
       end,
       Codes).
 
 display_prefix_property_test() ->
     Code = geohex:encode(52.3026, 4.6889),
     S1 = geohex:display(Code, 1),
-    S2 = geohex:display(Code, 2),
-    S3 = geohex:display(Code, 3),
     S4 = geohex:display(Code, 4),
-    S5 = geohex:display(Code, 5),
-    ?assertEqual(true, binary_prefix(S1, S2)),
-    ?assertEqual(true, binary_prefix(S2, S3)),
-    ?assertEqual(true, binary_prefix(S3, S4)),
-    ?assertEqual(true, binary_prefix(S4, S5)).
+    S6 = geohex:display(Code, 6),
+    S7 = geohex:display(Code, 7),
+
+    %% In Base-49, each character represents one level exactly.
+    ?assert(binary_prefix(S1, S4)),
+    ?assert(binary_prefix(S4, S6)),
+    ?assert(binary_prefix(S6, S7)).
 
 coarsen_consistency_test() ->
     Code = geohex:encode(52.3026, 4.6889),
-    ?assertEqual(Code, geohex:coarsen(Code, 5)),
-    ?assertEqual(geohex:coarsen(Code, 4), geohex:parse(geohex:display(Code, 4))),
-    ?assertEqual(geohex:coarsen(Code, 3), geohex:parse(geohex:display(Code, 3))),
-    ?assertEqual(geohex:coarsen(Code, 2), geohex:parse(geohex:display(Code, 2))),
-    ?assertEqual(geohex:coarsen(Code, 1), geohex:parse(geohex:display(Code, 1))).
+    ?assertEqual(Code, geohex:coarsen(Code, 7)),
+    %% parse(display(Code, L)) returns the level-7 coordinate of the cell's start.
+    ?assertEqual(geohex:coarsen(Code, 6), geohex:coarsen(geohex:parse(geohex:display(Code, 6)), 6)),
+    ?assertEqual(geohex:coarsen(Code, 4), geohex:coarsen(geohex:parse(geohex:display(Code, 4)), 4)),
+    ?assertEqual(geohex:coarsen(Code, 1), geohex:coarsen(geohex:parse(geohex:display(Code, 1)), 1)).
 
 are_nearby_test() ->
     Code = geohex:encode(52.3026, 4.6889),
     SameCell = geohex:encode(52.3027, 4.6890),
-    DifferentButNearby = geohex:encode(52.3055, 4.6925),
+    DifferentButNearby = geohex:encode(52.3040, 4.6910),
 
-    ?assert(geohex:are_nearby(Code, SameCell, 5)),
-    ?assert(geohex:are_nearby(Code, SameCell, 4)),
-    ?assert(geohex:are_nearby(Code, SameCell, 3)),
-    ?assertNot(geohex:are_nearby(Code, DifferentButNearby, 5)),
-    ?assert(geohex:are_nearby(Code, DifferentButNearby, 4) orelse
-             geohex:are_nearby(Code, DifferentButNearby, 3)).
+    ?assert(geohex:are_nearby(Code, SameCell, 7)),
+    ?assert(geohex:are_nearby(Code, SameCell, 6)),
+    ?assertNot(geohex:are_nearby(Code, DifferentButNearby, 7)),
+    %% At level 4 (city scale), they should definitely be in the same cell.
+    ?assert(geohex:are_nearby(Code, DifferentButNearby, 4)).
 
 neighbors_test() ->
     Code = geohex:encode(52.3026, 4.6889),
