@@ -167,8 +167,7 @@ mod3(X) when X < 0 -> ((X rem 3) + 3) rem 3.
 
 latlon_to_xy(Lat, Lon) ->
     CosLat = math:cos(Lat * math:pi() / 180.0),
-    {Lon * ?M_PER_DEG_LAT * CosLat,
-     Lat * ?M_PER_DEG_LAT}.
+    {Lon * ?M_PER_DEG_LAT * CosLat, Lat * ?M_PER_DEG_LAT}.
 
 xy_to_latlon(X, Y) ->
     Lat = Y / ?M_PER_DEG_LAT,
@@ -181,8 +180,7 @@ xy_to_axial(X, Y) ->
     {Qf, Rf}.
 
 axial_to_xy(Q, R) ->
-    {?BQ_X * Q + ?BR_X * R,
-     ?BR_Y * R}.
+    {?BQ_X * Q + ?BR_X * R, ?BR_Y * R}.
 
 hex_round(Qf, Rf) ->
     Sf = -Qf - Rf,
