@@ -1,4 +1,4 @@
-%% @doc HexVeil V3 - An aperture-3 hierarchical location encoding.
+%% @doc HexVeil - An aperture-3 hierarchical location encoding.
 %%
 %% This implementation uses an Aperture 3 hierarchy (Area x 3 per level)
 %% with a 30-degree rotation at each step.
@@ -110,43 +110,35 @@ cell_geometry(Digits, Level) ->
 display(Digits) ->
     display(Digits, length(Digits)).
 
-%% @doc Compact display using a sentinel bit to encode the level.
 display(Digits, Level) ->
     Data = lists:sublist(Digits, Level),
-    %% Append sentinel '1' and group
-    list_to_binary(group_base27(Data ++ [1], [])).
+    group_base27(list_to_binary(Data ++ [1]), <<>>).
 
-%% @doc Parse a compact base-27 string or binary back into ternary digits.
-parse(Binary) when is_binary(Binary) ->
-    parse(binary_to_list(Binary));
-parse(String) ->
-    Digits = ungroup_base27(String, []),
-    %% Find the rightmost 1 (the sentinel)
-    {Data, _} = split_at_sentinel(lists:reverse(Digits)),
-    Data.
+parse(Binary) ->
+    strip_sentinel(ungroup_base27(Binary, <<>>)).
 
-split_at_sentinel([1 | Rest]) -> {lists:reverse(Rest), ok};
-split_at_sentinel([0 | Rest]) -> split_at_sentinel(Rest).
+strip_sentinel(Binary) ->
+    strip_sentinel(Binary, byte_size(Binary) - 1).
+strip_sentinel(Binary, Pos) ->
+    case Binary of
+        <<Prefix:Pos/binary, 1>> -> binary_to_list(Prefix);
+        <<Prefix:Pos/binary, 0>> -> strip_sentinel(Prefix, Pos - 1)
+    end.
 
-%% ---------------------------------------------------------------------------
-%% Internal: Native Base-27 Encoding
-%% ---------------------------------------------------------------------------
+group_base27(<<D1, D2, D3, Rest/binary>>, Acc) ->
+    group_base27(Rest, <<Acc/binary, (to_b27(D1*9 + D2*3 + D3))>>);
+group_base27(<<D1, D2>>, Acc) ->
+    <<Acc/binary, (to_b27(D1*9 + D2*3))>>;
+group_base27(<<D1>>, Acc) ->
+    <<Acc/binary, (to_b27(D1*9))>>;
+group_base27(<<>>, Acc) ->
+    Acc.
 
-group_base27([], Acc) -> lists:reverse(Acc);
-group_base27([D1, D2, D3 | Rest], Acc) ->
-    group_base27(Rest, [to_b27(D1*9 + D2*3 + D3) | Acc]);
-group_base27([D1, D2], Acc) ->
-    group_base27([], [to_b27(D1*9 + D2*3) | Acc]);
-group_base27([D1], Acc) ->
-    group_base27([], [to_b27(D1*9) | Acc]).
-
-ungroup_base27([], Acc) -> lists:flatten(lists:reverse(Acc));
-ungroup_base27([Char | Rest], Acc) ->
+ungroup_base27(<<Char, Rest/binary>>, Acc) ->
     Val = from_b27(Char),
-    D1 = Val div 9,
-    D2 = (Val rem 9) div 3,
-    D3 = Val rem 3,
-    ungroup_base27(Rest, [[D1, D2, D3] | Acc]).
+    ungroup_base27(Rest, <<Acc/binary, (Val div 9), ((Val rem 9) div 3), (Val rem 3)>>);
+ungroup_base27(<<>>, Acc) ->
+    Acc.
 
 to_b27(V) when V < 10 -> $0 + V;
 to_b27(V) -> $a + V - 10.
