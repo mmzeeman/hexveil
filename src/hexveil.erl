@@ -170,9 +170,8 @@ offset(0) -> {0, 0};
 offset(1) -> {1, 0};
 offset(2) -> {0, 1}.
 
-mod3(X) when X > 0 -> X rem 3;
-mod3(X) when X < 0 -> ((X rem 3) + 3) rem 3;
-mod3(0) -> 0.
+mod3(X) when X >= 0 -> X rem 3;
+mod3(X) when X < 0 -> ((X rem 3) + 3) rem 3.
 
 %% ---------------------------------------------------------------------------
 %% Internal: Geometry
