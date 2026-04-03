@@ -79,3 +79,45 @@ privacy_test() ->
 ico_test() ->
     V = isea4h:ico_verts(),
     ?assertEqual(12, length(V)).
+
+%% Verify the specific Lon/Lat of the icosahedron vertices
+ico_coords_test() ->
+    %% We need to reach into the internal to_xyz/decode logic or just verify the Verts list.
+    %% Since ico_verts() returns XYZ, let's convert them back to Lon/Lat for verification.
+    D2R = math:pi() / 180.0,
+    Verts = isea4h:ico_verts(),
+    Coords = [begin
+                R = math:sqrt(X*X + Y*Y + Z*Z),
+                Lat = math:asin(Z/R) / D2R,
+                Lon = math:atan2(Y, X) / D2R,
+                {Lon, Lat}
+              end || {X, Y, Z} <- Verts],
+    
+    %% Expected Structure:
+    %% 0: North Pole (90)
+    %% 1-5: Upper Ring (~26.56 lat, 0, 72, 144, 216, 288 lon)
+    %% 6-10: Lower Ring (~ -26.56 lat, 36, 108, 180, 252, 324 lon)
+    %% 11: South Pole (-90)
+    
+    {_, NP_Lat} = lists:nth(1, Coords),
+    ?assert(abs(NP_Lat - 90.0) < 0.0001),
+    
+    UpperRing = lists:sublist(Coords, 2, 5),
+    lists:foreach(fun({_Lon, Lat}) ->
+        ?assert(abs(Lat - 26.56505) < 0.001)
+    end, UpperRing),
+    
+    LowerRing = lists:sublist(Coords, 7, 5),
+    lists:foreach(fun({_Lon, Lat}) ->
+        ?assert(abs(Lat + 26.56505) < 0.001)
+    end, LowerRing),
+    
+    {_, SP_Lat} = lists:nth(12, Coords),
+    ?assert(abs(SP_Lat + 90.0) < 0.0001),
+    
+    %% Check longitudes of upper ring (0, 72, 144, 216, 288)
+    ExpectedUpperLon = [0.0, 72.0, 144.0, -144.0, -72.0], %% atan2 returns -180..180
+    ActualUpperLon = [L || {L, _} <- UpperRing],
+    lists:zipwith(fun(E, A) -> ?assert(abs(E - A) < 0.0001) end, ExpectedUpperLon, ActualUpperLon),
+    
+    ok.
