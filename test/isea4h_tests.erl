@@ -64,6 +64,76 @@ neighbors_test() ->
     ?assertEqual(6, length(N)),
     lists:foreach(fun(C) -> ?assert(is_binary(C)) end, N).
 
+%% Test that neighbors are geographically close to the center cell,
+%% even when crossing face boundaries.
+neighbor_consistency_test() ->
+    %% Pick several points, including some near known boundaries (vertices).
+    TestPoints = [
+        {0.0, 0.0},
+        {45.0, 45.0},
+        {89.9, 0.0},   %% Near North Pole
+        {-89.9, 0.0},  %% Near South Pole
+        {26.565, 0.0}, %% Near vertex 1
+        {0.0, 180.0}
+    ],
+    Res = 7,
+    lists:foreach(fun(Coord) ->
+        Code = isea4h:encode(Coord, Res),
+        {Lat, Lon} = isea4h:decode(Code),
+        Neighbors = isea4h:neighbors(Code),
+        ?assertEqual(6, length(Neighbors)),
+
+        lists:foreach(fun(NCode) ->
+            {NLat, NLon} = isea4h:decode(NCode),
+            %% Calculate a rough distance or just check they are within some small bound.
+            %% At Res 7, cell diameter is small (roughly 1-2 degrees depending on scale).
+            %% Let's use a conservative 5.0 degree limit for "closeness" to account for distortion.
+            ?assert(abs(NLat - Lat) < 5.0, 
+                    io_lib:format("Neighbor ~s (Lat ~p) too far from center ~s (Lat ~p)", [NCode, NLat, Code, Lat])),
+            
+            %% For longitude, handle wrap around. Ignore if very near poles.
+            IsNearPole = abs(Lat) > 85.0 orelse abs(NLat) > 85.0,
+            DiffLon = abs(NLon - Lon),
+            ActualDiffLon = lists:min([DiffLon, abs(DiffLon - 360.0)]),
+            ?assert(IsNearPole orelse ActualDiffLon < 10.0, 
+                    io_lib:format("Neighbor ~s (Lon ~p) too far from center ~s (Lon ~p)", [NCode, NLon, Code, Lon]))
+        end, Neighbors)
+    end, TestPoints).
+
+%% Test specifically for crossing face boundaries.
+neighbor_boundary_test() ->
+    %% We need a point where neighbors fall on different faces.
+    %% Let's try to find one by searching around a vertex.
+    %% Vertex 1 is at {UpLat, 0.0}.
+    D2R = math:pi() / 180.0,
+    UpLat = math:atan(0.5) / D2R,
+    
+    %% Sample points around this vertex to find a boundary crossing.
+    %% Face 0, 1, 5, 14, 4 all meet near vertex 1. (Wait, let me check ico_faces again).
+    %% ico_faces: {0,1,2}, {1,6,2}, {5,10,1}, {0,5,1} ... 
+    %% Vertex 1 is in faces 0, 4, 5, 13, 14.
+    
+    Code = isea4h:encode({UpLat, 0.0}, 8),
+    Neighbors = isea4h:neighbors(Code),
+    
+    %% Extract face IDs.
+    Faces = [begin [F, _] = string:split(binary_to_list(N), "-"), F end || N <- Neighbors],
+    UniqueFaces = lists:usort(Faces),
+    
+    %% We expect at least two different face IDs in the neighbors if we are on a boundary.
+    %% This test confirms the code *actually* crosses faces.
+    ?assert(length(UniqueFaces) >= 1), %% It might be 1 if we're not exactly on edge.
+    
+    %% Let's force a boundary crossing by looking at many points near vertex.
+    Crossed = lists:any(fun(DLon) ->
+        C = isea4h:encode({UpLat, DLon}, 8),
+        Ns = isea4h:neighbors(C),
+        Fs = [begin [F, _] = string:split(binary_to_list(N), "-"), F end || N <- Ns],
+        length(lists:usort(Fs)) > 1
+    end, [I * 0.01 || I <- lists:seq(-10, 10)]),
+    
+    ?assert(Crossed, "Did not find any neighbor boundary crossing near vertex 1").
+
 %% ico_verts returns the expected number of vertices (12)
 ico_test() ->
     V = isea4h:ico_verts(),

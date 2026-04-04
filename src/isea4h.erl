@@ -62,24 +62,17 @@ neighbors(<<FaceBin:1/binary, $-, Digits/binary>>) ->
 
     Dirs = [{1,0}, {-1,0}, {0,1}, {0,-1}, {1,-1}, {-1,1}],
     Scale = ?BASE_SCALE / math:pow(2.0, Res),
-    Off = 1 bsl Res,
     [begin
          QG2 = QG + DQ,
          RG2 = RG + DR,
-         {FaceOut, ND} =
-             if
-                 (QG2 >= -Off) andalso (QG2 =< Off - 1)
-                 andalso (RG2 >= -Off) andalso (RG2 =< Off - 1) ->
-                     {FaceBin, to_digits({QG2, RG2}, Res)};
-                 true ->
-                     Qf2 = QG2 * Scale,
-                     Rf2 = RG2 * Scale,
-                     XYZ = unproject({Qf2, Rf2}, Face),
-                     NewFace = nearest_face(XYZ),
-                     Axial = project(XYZ, NewFace),
-                     SnappedAxial = to_grid(Axial, Res),
-                     {integer_to_binary(NewFace, ?NR_FACES), to_digits(SnappedAxial, Res)}
-             end,
+         Qf2 = QG2 * Scale,
+         Rf2 = RG2 * Scale,
+         XYZ = unproject({Qf2, Rf2}, Face),
+         NewFace = nearest_face(XYZ),
+         Axial = project(XYZ, NewFace),
+         SnappedAxial = to_grid(Axial, Res),
+         FaceOut = integer_to_binary(NewFace, ?NR_FACES),
+         ND = to_digits(SnappedAxial, Res),
          <<FaceOut/binary, $-, ND/binary>>
      end || {DQ, DR} <- Dirs].
 
@@ -191,12 +184,6 @@ to_code(Face, Axial, Res) ->
     Digits = to_digits(Axial, Res),
     FaceBin = integer_to_binary(Face, ?NR_FACES),
     <<FaceBin/binary, $-, Digits/binary>>.
-
-from_code(<<FaceBin:1/binary, $-, DigitsBin/binary>>) ->
-    Face = binary_to_integer(FaceBin, ?NR_FACES),
-    Res = byte_size(DigitsBin),
-    Axial = from_digits(binary_to_list(DigitsBin), Res),
-    {Face, Axial, Res}.
 
 to_digits({QG, RG}, Res) ->
     Off = 1 bsl (Res-1),
