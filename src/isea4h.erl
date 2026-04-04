@@ -35,7 +35,7 @@ decode(<<FaceBin:1/binary, $-, DigitsBin/binary>>) ->
     Qf = QG * Scale,
     Rf = RG * Scale,
 
-    XYZ = unproject(Qf, Rf, Face),
+    XYZ = unproject({Qf, Rf}, Face),
     from_xyz(XYZ).
 
 parent(<<_:1/binary, $-, DigitsBin/binary>>=Code) ->
@@ -46,14 +46,42 @@ parent(<<_:1/binary, $-, DigitsBin/binary>>=Code) ->
             Code
     end.
 
-neighbors(Code) when is_binary(Code) -> neighbors(binary_to_list(Code));
-neighbors(Code) ->
-    [FaceStr, Digits] = string:split(Code, "-"),
-    Face = list_to_integer(FaceStr),
-    Res  = length(Digits),
+%neighbors(Code) when is_binary(Code) -> neighbors(binary_to_list(Code));
+%neighbors(Code) ->
+%    [FaceStr, Digits] = string:split(Code, "-"),
+%    Face = list_to_integer(FaceStr),
+%    Res  = length(Digits),
+%    {QG, RG} = from_digits(Digits, Res),
+%    Dirs = [{1,0}, {-1,0}, {0,1}, {0,-1}, {1,-1}, {-1,1}],
+%    [to_code(Face, {QG+DQ, RG+DR}, Res) || {DQ, DR} <- Dirs].
+
+neighbors(<<FaceBin:1/binary, $-, Digits/binary>>) ->
+    Face = binary_to_integer(FaceBin, ?NR_FACES),
+    Res = byte_size(Digits),
     {QG, RG} = from_digits(Digits, Res),
+
     Dirs = [{1,0}, {-1,0}, {0,1}, {0,-1}, {1,-1}, {-1,1}],
-    [to_code(Face, {QG+DQ, RG+DR}, Res) || {DQ, DR} <- Dirs].
+    Scale = ?BASE_SCALE / math:pow(2.0, Res),
+    Off = 1 bsl Res,
+    [begin
+         QG2 = QG + DQ,
+         RG2 = RG + DR,
+         {FaceOut, ND} =
+             if
+                 (QG2 >= -Off) andalso (QG2 =< Off - 1)
+                 andalso (RG2 >= -Off) andalso (RG2 =< Off - 1) ->
+                     {FaceBin, to_digits({QG2, RG2}, Res)};
+                 true ->
+                     Qf2 = QG2 * Scale,
+                     Rf2 = RG2 * Scale,
+                     XYZ = unproject({Qf2, Rf2}, Face),
+                     NewFace = nearest_face(XYZ),
+                     Axial = project(XYZ, NewFace),
+                     SnappedAxial = to_grid(Axial, Res),
+                     {integer_to_binary(NewFace, ?NR_FACES), to_digits(SnappedAxial, Res)}
+             end,
+         <<FaceOut/binary, $-, ND/binary>>
+     end || {DQ, DR} <- Dirs].
 
 %% --- sphere geometry ---
 
@@ -132,7 +160,7 @@ project({X, Y, Z}, Face) ->
     Px = X/D-Cx, Py = Y/D-Cy, Pz = Z/D-Cz,
     {Px*Ux+Py*Uy+Pz*Uz, Px*Vx+Py*Vy+Pz*Vz}.
 
-unproject(Qf, Rf, Face) ->
+unproject({Qf, Rf}, Face) ->
     {{Cx,Cy,Cz},{Ux,Uy,Uz},{Vx,Vy,Vz}} = face_basis(Face),
     unit({Cx + Qf*Ux + Rf*Vx,
           Cy + Qf*Uy + Rf*Vy,
@@ -180,6 +208,8 @@ to_digits1(Q, R, L, Acc) when L >= 0 ->
 to_digits1(_Q, _R, _L, Acc) ->
     Acc.
 
+from_digits(Digits, Res) when is_binary(Digits) ->
+    from_digits(binary_to_list(Digits), Res);
 from_digits(Digits, Res) ->
     Off = 1 bsl (Res-1),
     {Q, R} = lists:foldl(
