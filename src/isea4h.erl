@@ -17,6 +17,15 @@
 -define(BASE_SCALE, 2.0).
 -define(NR_FACES, 20).
 
+%% Inradius of the gnomonic face triangle (distance from centre to each edge).
+-define(FACE_INRADIUS, 0.3819660112501052).
+
+%% Outward edge normals for the two triangle orientations.
+%% Type A (upward): faces 0-4, 6, 8, 10, 12, 14.
+%% Type B (downward): faces 5, 7, 9, 11, 13, 15-19.
+-define(FACE_NORMALS_A, [{?SQRT3_OVER_2, -0.5}, {0.0, 1.0}, {-?SQRT3_OVER_2, -0.5}]).
+-define(FACE_NORMALS_B, [{?SQRT3_OVER_2, 0.5}, {-?SQRT3_OVER_2, 0.5}, {0.0, -1.0}]).
+
 -define(DIRS, [{1,0}, {-1,0}, {0,1}, {0,-1}, {1,-1}, {-1,1}]).
 -define(DIRS2, [                                       
       {2,0}, {-2,0}, {0,2}, {0,-2}, {2,-2}, {-2,2}, 
@@ -79,8 +88,9 @@ cell_geometry(<<_:1/binary, $-, DigitsBin/binary>>=Code) ->
 cell_geometry(<<FaceBin:1/binary, $-, DigitsBin/binary>>, Res) -> 
     Face = binary_to_integer(FaceBin, ?NR_FACES),                     
     CellAxial = from_digits(DigitsBin, byte_size(DigitsBin)),         
-    Scale = scale(Res),              
-                                                          
+    Scale = scale(Res),
+    Normals = face_edge_normals(Face),
+
     S = 1.0 / 3.0,                                       
     CornerOffsets = [                                   
                      {2*S, -S}, {S, S}, {-S, 2*S},                  
@@ -89,20 +99,36 @@ cell_geometry(<<FaceBin:1/binary, $-, DigitsBin/binary>>, Res) ->
                                                     
     [begin
         Cartesian = axial_to_cartesian(vadd(CellAxial, Delta), Scale),
-        XYZ = unproject(Cartesian, Face),
-        Nearest = nearest_face(XYZ),
-        CanonFace = min(Face, Nearest),
-        FinalXYZ = case CanonFace =:= Face of
-                       true ->
-                           XYZ;
-                       false ->
-                           %% Corner lies over a neighbouring face.
-                           %% Normalise through that face's gnomonic plane so
-                           %% that adjacent cells produce identical shared vertices.
-                           unproject(project(XYZ, CanonFace), CanonFace)
-                   end,      
-        from_xyz(FinalXYZ) 
+        Clamped = clamp_to_face(Cartesian, Normals),
+        from_xyz(unproject(Clamped, Face))
      end || Delta <- CornerOffsets].
+
+%% --- face edge clamping ---
+
+%% Return the three outward edge normals for the gnomonic face triangle.
+face_edge_normals(Face) when Face =< 4 -> ?FACE_NORMALS_A;
+face_edge_normals(Face) when Face >= 15 -> ?FACE_NORMALS_B;
+face_edge_normals(Face) -> % 5..14
+    case Face band 1 of   % even = A (upward), odd = B (downward)
+        0 -> ?FACE_NORMALS_A;
+        1 -> ?FACE_NORMALS_B
+    end.
+
+%% Clamp a 2-D Cartesian point so it lies inside (or on the edge of)
+%% the gnomonic face triangle.  For each outward normal N, if
+%% N · P > INRADIUS the point is outside that edge and we push it back.
+clamp_to_face(P, Normals) ->
+    lists:foldl(fun(N, Acc) -> clamp_edge(Acc, N) end, P, Normals).
+
+clamp_edge({Px, Py}, {Nx, Ny}) ->
+    Dot = Px * Nx + Py * Ny,
+    case Dot > ?FACE_INRADIUS of
+        true ->
+            Excess = Dot - ?FACE_INRADIUS,
+            {Px - Excess * Nx, Py - Excess * Ny};
+        false ->
+            {Px, Py}
+    end.
 
 %% --- sphere geometry ---
 
