@@ -89,19 +89,17 @@ cell_geometry(<<FaceBin:1/binary, $-, DigitsBin/binary>>, Res) ->
                                                     
     [begin
         Cartesian = axial_to_cartesian(vadd(CellAxial, Delta), Scale),
-
-        %% Project each corner through its own nearest face to eliminate gaps
         XYZ = unproject(Cartesian, Face),
         Nearest = nearest_face(XYZ),
-
-        FinalXYZ = case Nearest == Face of
+        CanonFace = min(Face, Nearest),
+        FinalXYZ = case CanonFace =:= Face of
                        true ->
                            XYZ;
                        false ->
                            %% Corner lies over a neighbouring face.
                            %% Normalise through that face's gnomonic plane so
                            %% that adjacent cells produce identical shared vertices.
-                           unproject(project(XYZ, Nearest), Nearest)
+                           unproject(project(XYZ, CanonFace), CanonFace)
                    end,      
         from_xyz(FinalXYZ) 
      end || Delta <- CornerOffsets].
