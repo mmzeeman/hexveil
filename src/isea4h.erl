@@ -18,11 +18,22 @@
 -define(NR_FACES, 20).
 
 %% Inradius of the gnomonic face triangle (distance from centre to each edge).
+%% All 20 faces project to equilateral triangles with circumradius R ≈ 0.7640
+%% and inradius r = R/2 ≈ 0.3820.  Equivalently, this is the Y-coordinate
+%% at which the icosahedron vertices project onto the flat (bottom/top) edge.
 -define(FACE_INRADIUS, 0.3819660112501052).
 
 %% Outward edge normals for the two triangle orientations.
-%% Type A (upward): faces 0-4, 6, 8, 10, 12, 14.
-%% Type B (downward): faces 5, 7, 9, 11, 13, 15-19.
+%%
+%% The 20 gnomonic face triangles come in two orientations:
+%%   Type A (upward, apex at bottom): faces 0-4, 6, 8, 10, 12, 14.
+%%     Edges: right  (√3/2, -½), bottom (0, 1), left (-√3/2, -½).
+%%   Type B (downward, apex at top):  faces 5, 7, 9, 11, 13, 15-19.
+%%     Edges: right  (√3/2,  ½), left  (-√3/2,  ½), top (0, -1).
+%%
+%% Faces 0-4 share the north-pole vertex (ico vertex 0), faces 15-19 share
+%% the south-pole vertex (ico vertex 11).  Faces 5-14 alternate: even
+%% indices are Type A (upward mid-ring), odd indices are Type B (downward).
 -define(FACE_NORMALS_A, [{?SQRT3_OVER_2, -0.5}, {0.0, 1.0}, {-?SQRT3_OVER_2, -0.5}]).
 -define(FACE_NORMALS_B, [{?SQRT3_OVER_2, 0.5}, {-?SQRT3_OVER_2, 0.5}, {0.0, -1.0}]).
 
@@ -106,10 +117,12 @@ cell_geometry(<<FaceBin:1/binary, $-, DigitsBin/binary>>, Res) ->
 %% --- face edge clamping ---
 
 %% Return the three outward edge normals for the gnomonic face triangle.
+%% Faces 0-4 are the north-pole cap (Type A), faces 15-19 are the south-pole
+%% cap (Type B).  The mid-ring faces 5-14 alternate: even = A, odd = B.
 face_edge_normals(Face) when Face =< 4 -> ?FACE_NORMALS_A;
 face_edge_normals(Face) when Face >= 15 -> ?FACE_NORMALS_B;
 face_edge_normals(Face) -> % 5..14
-    case Face band 1 of   % even = A (upward), odd = B (downward)
+    case Face band 1 of
         0 -> ?FACE_NORMALS_A;
         1 -> ?FACE_NORMALS_B
     end.
