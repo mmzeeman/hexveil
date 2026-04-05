@@ -56,8 +56,7 @@ encode({Lat, Lon}, Res) when Res >= 1, Res =< 24 ->
 decode(<<FaceBin:1/binary, $-, DigitsBin/binary>>) ->
     Face = binary_to_integer(FaceBin, ?NR_FACES),
     Res = byte_size(DigitsBin),
-    Digits = binary_to_list(DigitsBin),
-    Axial = from_digits(Digits, Res),
+    Axial = from_digits(DigitsBin, Res),
     Scale = scale(Res),
     Cartesian = axial_to_cartesian(Axial, Scale),
     XYZ = unproject(Cartesian, Face),
@@ -287,9 +286,9 @@ from_digits(Digits, Res) ->
                        {Qa + ((D bsr 1) bsl Bit), Ra + ((D band 1) bsl Bit)}
                end,
                {0, 0},
-               lists:zip([C - $0 || C <- Digits],
-                         lists:seq(1, Res))),
+               lists:zip([C - $0 || C <- Digits], lists:seq(1, Res))),
     {Q - Off, R - Off}.
+
 
 %% --- math helpers ---
 
