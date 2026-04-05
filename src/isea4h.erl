@@ -1,3 +1,34 @@
+%% @doc ISEA4H - Icosahedral Snyder Equal Area Aperture 4 Hexagon.
+%%
+%% This implementation uses an Aperture 4 hierarchy (Area x 4 per level)
+%% on an icosahedral projection. It provides a Discrete Global Grid System
+%% (DGGS) with equal-area properties.
+%%
+%% Characteristics:
+%% - Icosahedral projection (20 faces).
+%% - Snyder Equal Area projection.
+%% - Aperture 4 (each level divides cell area by 4).
+%% - Scale factor: 2.0 per level (edge length).
+%% - Cell sizes (approximate diameter):
+%%   Level | Size (approx) | Use Case
+%%   ------|---------------|----------------------------
+%%   24    | 2.5m          | High Precision / Human Scale
+%%   18    | 160m          | Privacy Level 1 (~150m)
+%%   17    | 320m          | Privacy Level 2 (~300m)
+%%   16    | 640m          | Privacy Level 3 (~600m)
+%%   9     | 80km          | Regional Scale
+%%   1     | 20,000km      | Global Scale
+%%
+%% Coordinate system uses 20 faces (0-19) and a base-4 digit encoding.
+%% The format is "Face-Digits" where Face is 0-9a-j (base 20).
+%%
+%% Hierarchical Examples:
+%%   Location        | L24 (2.5m)               | L17 (320m)        | L9 (80km) | L1 (20kkm)
+%%   ----------------|--------------------------|-------------------|-----------|-----------
+%%   Vondelpark Ent. | 0-213123233300313032331123 | 0-21312323330031321 | 0-213123322 | 0-3
+%%   Leidseplein     | 0-213123233300130310001202 | 0-21312323330013031 | 0-213123322 | 0-3
+%%   Dam Square      | 0-213123233300100131120221 | 0-21312323330010102 | 0-213123322 | 0-3
+%%   Dom Utrecht     | 0-213123321210212311201233 | 0-21312332121021320 | 0-213123323 | 0-3
 
 -module(isea4h).
 
