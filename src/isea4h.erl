@@ -29,6 +29,21 @@
 %%   Leidseplein     | 0-213123233300130310001202 | 0-21312323330013031 | 0-213123322 | 0-3
 %%   Dam Square      | 0-213123233300100131120221 | 0-21312323330010102 | 0-213123322 | 0-3
 %%   Dom Utrecht     | 0-213123321210212311201233 | 0-21312332121021320 | 0-213123323 | 0-3
+%%
+%% Edge Mapping and Gaps:
+%% This implementation accepts small geometric gaps at the icosahedral face
+%% boundaries. Because each 2D triangular face is a flat projection, the 
+%% hexagons at the edges do not perfectly "touch" their neighbors in 3D 
+%% Lat/Lon space.
+%%
+%% However, encoding is always continuous:
+%% 1. Every coordinate on the sphere is closer to one of the 20 face centers.
+%% 2. nearest_face/1 assigns the coordinate to that face's domain.
+%% 3. The coordinate is projected onto that face's plane and mapped to the
+%%    nearest integer hexagon.
+%%
+%% This ensures that any point falling into a "geometric gap" is naturally
+%% captured by the nearest hexagon on the dominant face.
 
 -module(isea4h).
 
@@ -48,26 +63,6 @@
 -define(BASE_SCALE, 2.0).
 -define(NR_FACES, 20).
 
-%% Inradius of the gnomonic face triangle (distance from centre to each edge).
-%% All 20 faces project to equilateral triangles with circumradius R ≈ 0.7640
-%% and inradius r = R/2 ≈ 0.3820.  Equivalently, this is the Y-coordinate
-%% at which the icosahedron vertices project onto the flat (bottom/top) edge.
--define(FACE_INRADIUS, 0.3819660112501052).
-
-%% Outward edge normals for the two triangle orientations.
-%%
-%% The 20 gnomonic face triangles come in two orientations:
-%%   Type A (upward, apex at bottom): faces 0-4, 6, 8, 10, 12, 14.
-%%     Edges: right  (√3/2, -½), bottom (0, 1), left (-√3/2, -½).
-%%   Type B (downward, apex at top):  faces 5, 7, 9, 11, 13, 15-19.
-%%     Edges: right  (√3/2,  ½), left  (-√3/2,  ½), top (0, -1).
-%%
-%% Faces 0-4 share the north-pole vertex (ico vertex 0), faces 15-19 share
-%% the south-pole vertex (ico vertex 11).  Faces 5-14 alternate: even
-%% indices are Type A (upward mid-ring), odd indices are Type B (downward).
--define(FACE_NORMALS_A, [{?SQRT3_OVER_2, -0.5}, {0.0, 1.0}, {-?SQRT3_OVER_2, -0.5}]).
--define(FACE_NORMALS_B, [{?SQRT3_OVER_2, 0.5}, {-?SQRT3_OVER_2, 0.5}, {0.0, -1.0}]).
-
 -define(DIRS, [{1,0}, {-1,0}, {0,1}, {0,-1}, {1,-1}, {-1,1}]).
 -define(DIRS2, [                                       
       {2,0}, {-2,0}, {0,2}, {0,-2}, {2,-2}, {-2,2}, 
@@ -81,8 +76,8 @@ encode({Lat, Lon}, Res) when Res >= 1, Res =< 24 ->
     XYZ = to_xyz({Lat, Lon}),
     Face = nearest_face(XYZ),
     Axial = project(XYZ, Face),
-    SnappedAxial = to_grid(Axial, Res),
-    to_code(Face, SnappedAxial, Res).
+    {Q, R} = to_grid(Axial, Res),
+    to_code(Face, {round(Q), round(R)}, Res).
 
 decode(<<FaceBin:1/binary, $-, DigitsBin/binary>>) ->
     Face = binary_to_integer(FaceBin, ?NR_FACES),
@@ -115,11 +110,12 @@ compute_neighbors(<<FaceBin:1/binary, $-, Digits/binary>>, Dirs) ->
     [begin
          Cartesian = axial_to_cartesian(plus(CellAxial, Delta), Scale),
          XYZ = unproject(Cartesian, Face),
-         NewFace = nearest_face(XYZ),
+         %% Optimized topological search
+         NewFace = nearest_face(XYZ, Face),
          Axial = project(XYZ, NewFace),
-         SnappedAxial = to_grid(Axial, Res),
+         {Q, R} = to_grid(Axial, Res),
          FaceOut = integer_to_binary(NewFace, ?NR_FACES),
-         ND = to_digits(SnappedAxial, Res),
+         ND = to_digits({round(Q), round(R)}, Res),
          <<FaceOut/binary, $-, ND/binary>>
      end || Delta <- Dirs].
 
@@ -130,55 +126,64 @@ cell_geometry(<<FaceBin:1/binary, $-, DigitsBin/binary>>, Res) ->
     Face = binary_to_integer(FaceBin, ?NR_FACES),                     
     CellAxial = from_digits(DigitsBin, byte_size(DigitsBin)),         
     Scale = scale(Res),
-    Normals = face_edge_normals(Face),
 
     S = 1.0 / 3.0,                                       
     CornerOffsets = [                                   
                      {2*S, -S}, {S, S}, {-S, 2*S},                  
                      {-2*S, S}, {-S, -S}, {S, -2*S}                
                     ],                                               
-                                                    
+
     [begin
         Cartesian = axial_to_cartesian(plus(CellAxial, Delta), Scale),
-        Snapped = snap_to_face(Cartesian, Normals, Scale),
-        from_xyz(unproject(Snapped, Face))
+        XYZ = unproject(Cartesian, Face),
+        from_xyz(XYZ)
      end || Delta <- CornerOffsets].
 
-%% --- face edge clamping ---
+%% --- topological navigation ---
 
-%% Return the three outward edge normals for the gnomonic face triangle.
-%% Faces 0-4 are the north-pole cap (Type A), faces 15-19 are the south-pole
-%% cap (Type B).  The mid-ring faces 5-14 alternate: even = A, odd = B.
-face_edge_normals(Face) when Face =< 4 -> ?FACE_NORMALS_A;
-face_edge_normals(Face) when Face >= 15 -> ?FACE_NORMALS_B;
-face_edge_normals(Face) -> % 5..14
-    case Face band 1 of
-        0 -> ?FACE_NORMALS_A;
-        1 -> ?FACE_NORMALS_B
+%% Optimized nearest_face that checks a hint and its neighbors first.
+nearest_face(XYZ) ->
+    nearest_face(XYZ, face_centres(), 0, -2.0, 0).
+
+nearest_face({X,Y,Z}=XYZ, HintFace) ->
+    Neighbors = element(HintFace+1, face_adjacencies()),
+    CheckFaces = tuple_to_list(Neighbors),
+    {Cx,Cy,Cz} = lists:nth(HintFace+1, face_centres()),
+    D = X*Cx + Y*Cy + Z*Cz,
+    search_faces(XYZ, CheckFaces, D, HintFace).
+
+
+search_faces(_XYZ, [], _MaxD, MaxIdx) ->
+    MaxIdx;
+search_faces({X,Y,Z}=XYZ, [FaceIdx|Rest], MaxD, MaxIdx) ->
+    {Cx,Cy,Cz} = lists:nth(FaceIdx+1, face_centres()),
+    D = X*Cx + Y*Cy + Z*Cz,
+    if D > MaxD -> search_faces(XYZ, Rest, D, FaceIdx);
+       true -> search_faces(XYZ, Rest, MaxD, MaxIdx)
     end.
 
-%% Snap a 2-D Cartesian point onto the face edge when it is close to
-%% (or beyond) the gnomonic face triangle boundary.  For each outward
-%% normal N, if N · P > INRADIUS − Scale the point is within one cell
-%% width of the edge and we move it to lie exactly on the edge.  This
-%% ensures hexagons on both sides of a face boundary have their
-%% edge-facing corners on the shared icosahedron edge, eliminating gaps.
-snap_to_face(P, Normals, Scale) ->
-    lists:foldl(fun(N, Acc) ->
-                        snap_edge(Acc, N, Scale)
-                end,
-                P,
-                Normals).
-
-snap_edge(A, Normal, Scale) ->
-    Dot = dot(A, Normal),
-    case Dot > ?FACE_INRADIUS - Scale of
-        true ->
-            Excess = Dot - ?FACE_INRADIUS,
-            sub(A, scale(Excess, Normal));
-        false ->
-            A
+face_adjacencies() ->
+    case persistent_term:get({?MODULE, face_adjacencies}, undefined) of
+        undefined ->
+            Faces = ico_faces(),
+            Adj = [begin
+                {V0, V1, V2} = lists:nth(I+1, Faces),
+                {find_neighbor(I, V1, V2, Faces),
+                 find_neighbor(I, V2, V0, Faces),
+                 find_neighbor(I, V0, V1, Faces)}
+            end || I <- lists:seq(0, 19)],
+            T = list_to_tuple(Adj),
+            persistent_term:put({?MODULE, face_adjacencies}, T),
+            T;
+        T -> T
     end.
+
+find_neighbor(MyIdx, Va, Vb, Faces) ->
+    [NeighborIdx] = [Idx || {Idx, F} <- lists:zip(lists:seq(0, 19), Faces),
+                            Idx /= MyIdx,
+                            lists:member(Va, tuple_to_list(F)),
+                            lists:member(Vb, tuple_to_list(F))],
+    NeighborIdx.
 
 %% --- sphere geometry ---
 
@@ -229,9 +234,6 @@ ico_verts() ->
             Verts;
         Verts -> Verts
     end.
-
-nearest_face(XYZ) ->
-    nearest_face(XYZ, face_centres(), 0, -2.0, 0).
 
 nearest_face(_XYZ, [], _Idx, _MaxD, MaxIdx) ->
     MaxIdx;
@@ -367,12 +369,3 @@ cross({Ax, Ay, Az}, {Bx, By, Bz}) ->
 
 plus({E1, E2}, {F1, F2}) ->
     {E1 + F1, E2 + F2}.
-
-dot({Ax, Ay}, {Bx, By}) ->
-    Ax * Bx + Ay * By.
-
-scale(S, {X, Y}) ->
-    {S * X, S * Y}.
-
-sub({Ax, Ay}, {Bx, By}) ->
-    {Ax - Bx, Ay - By}.
