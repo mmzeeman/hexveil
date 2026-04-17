@@ -108,20 +108,14 @@ optimal_level(DiameterMeters) when is_number(DiameterMeters), DiameterMeters > 0
 
 disk_from_center(Center, Res, DiameterMeters) ->
     CenterCode = encode(Center, Res),
-    %% Use the parent triangle's orthocenter as the disk center for privacy:
-    %% all users within the same parent cell produce identical disks,
+    %% Use the cell triangle's orthocenter as the disk center for privacy:
+    %% all users within the same cell produce identical disks,
     %% preventing exact location recovery from the set of codes.
-    ParentCode = parent(CenterCode),
-    PrivacyCenter = orthocenter(ParentCode),
+    DiskCenter = orthocenter(CenterCode),
     RadiusMeters = DiameterMeters / 2.0,
-    %% Start BFS from the cell containing the privacy center (the disk center)
-    %% so the BFS expands outward from the actual center of the disk.
-    %% Also seed with the user's cell to ensure it is always included.
-    StartCode = encode(PrivacyCenter, Res),
-    InitCodes = lists:usort([CenterCode, StartCode]),
-    Visited0 = sets:from_list(InitCodes, [{version, 2}]),
-    Queue0 = queue:from_list(InitCodes),
-    disk_bfs(PrivacyCenter, RadiusMeters, Queue0, Visited0, InitCodes).
+    Visited0 = sets:from_list([CenterCode], [{version, 2}]),
+    Queue0 = queue:from_list([CenterCode]),
+    disk_bfs(DiskCenter, RadiusMeters, Queue0, Visited0, [CenterCode]).
 
 disk_bfs(Center, RadiusMeters, Queue0, Visited, Acc) ->
     case queue:out(Queue0) of
