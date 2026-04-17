@@ -84,15 +84,24 @@ generate_viz(Lat, Lon, Res, MaybeDiam) ->
     %% Disk codes drawn first (below), then hierarchy on top
     Data = DiskData ++ BaseData,
 
-    %% Reference circle (true circle at the requested diameter)
+    %% Red dot at the exact user location
+    RedDotJs = io_lib:format(
+        "L.circleMarker([~f, ~f], {radius: 5, color: 'red', fillColor: 'red', "
+        "fillOpacity: 1.0, weight: 1, interactive: true}).addTo(map)"
+        ".bindPopup('Exact location: ~f, ~f');~n",
+        [Lat, Lon, Lat, Lon]),
+
+    %% Reference circle centered on the parent centroid (matching disk/3 privacy center)
     CircleJs = case MaybeDiam of
         undefined -> "";
         D ->
+            ParentCode = triveil:parent(Code),
+            {PLat, PLon} = triveil:decode(ParentCode),
             io_lib:format(
                 "L.circle([~f, ~f], {radius: ~f, color: '#e040e0', weight: 2, "
                 "dashArray: '6,4', fill: false, interactive: false}).addTo(map)"
-                ".bindPopup('Reference circle: ~f m diameter');~n",
-                [Lat, Lon, D / 2.0, D])
+                ".bindPopup('Reference circle: ~f m diameter (centered on parent centroid)');~n",
+                [PLat, PLon, D / 2.0, D])
     end,
 
     Html = io_lib:format("
@@ -133,7 +142,8 @@ data.forEach(d => {
     }).addTo(map);
 });
 ~s
-</script></body></html>", [DiskInfo, Lat, Lon, string:join(Data, ","), CircleJs]),
+~s
+</script></body></html>", [DiskInfo, Lat, Lon, string:join(Data, ","), CircleJs, RedDotJs]),
     
     file:write_file("triveil_viz.html", Html),
     io:format("Generated triveil_viz.html~n").
