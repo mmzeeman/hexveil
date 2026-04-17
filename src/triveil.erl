@@ -6,6 +6,7 @@
 -export([
     encode/2, encode/1,
     decode/1,
+    disk/2, disk/3,
     parent/1,
     cell_geometry/1,
     neighbors/1,
@@ -16,6 +17,7 @@
 -on_load(init_persistent_terms/0).
 
 -define(D2R, 0.017453292519943295).
+-define(EARTH_RADIUS_M, 6371000.0).
 -define(NR_FACES, 20).
 
 encode(Coord) ->
@@ -47,6 +49,57 @@ decode(<<FaceBin:1/binary, $-, DigitsBin/binary>>) ->
     %% Unproject using the same hexveil logic
     XYZ = unproject({CX, CY}, FaceIdx),
     from_xyz(XYZ).
+
+disk(Code, DiameterMeters) when is_binary(Code), is_number(DiameterMeters), DiameterMeters >= 0 ->
+    {Lat, Lon} = decode(Code),
+    [_, Digits] = binary:split(Code, <<"-">>),
+    Res = byte_size(Digits),
+    disk_from_center({Lat, Lon}, Res, DiameterMeters);
+disk({Lat, Lon}, DiameterMeters) when is_number(Lat), is_number(Lon), is_number(DiameterMeters), DiameterMeters >= 0 ->
+    disk({Lat, Lon}, 7, DiameterMeters).
+
+disk({Lat, Lon}, Res, DiameterMeters)
+  when is_number(Lat), is_number(Lon), is_integer(Res), Res > 0, is_number(DiameterMeters), DiameterMeters >= 0 ->
+    disk_from_center({Lat, Lon}, Res, DiameterMeters).
+
+disk_from_center(Center, Res, DiameterMeters) ->
+    CenterCode = encode(Center, Res),
+    RadiusMeters = DiameterMeters / 2.0,
+    Visited0 = sets:add_element(CenterCode, sets:new()),
+    lists:usort(disk_bfs(Center, RadiusMeters, [CenterCode], Visited0, [CenterCode])).
+
+disk_bfs(_Center, _RadiusMeters, [], _Visited, Acc) ->
+    Acc;
+disk_bfs(Center, RadiusMeters, [Code | Rest], Visited, Acc) ->
+    {AddedRev, Visited1, Acc1} = lists:foldl(
+        fun(NCode, {Added, V0, A0}) ->
+            case sets:is_element(NCode, V0) of
+                true ->
+                    {Added, V0, A0};
+                false ->
+                    V1 = sets:add_element(NCode, V0),
+                    DistMeters = great_circle_distance(Center, decode(NCode)),
+                    case DistMeters =< RadiusMeters of
+                        true -> {[NCode | Added], V1, [NCode | A0]};
+                        false -> {Added, V1, A0}
+                    end
+            end
+        end,
+        {[], Visited, Acc},
+        neighbors(Code)
+    ),
+    disk_bfs(Center, RadiusMeters, Rest ++ lists:reverse(AddedRev), Visited1, Acc1).
+
+great_circle_distance(P1, P2) ->
+    {X1, Y1, Z1} = to_xyz(P1),
+    {X2, Y2, Z2} = to_xyz(P2),
+    Dot0 = X1*X2 + Y1*Y2 + Z1*Z2,
+    Dot = if
+        Dot0 > 1.0 -> 1.0;
+        Dot0 < -1.0 -> -1.0;
+        true -> Dot0
+    end,
+    math:acos(Dot) * ?EARTH_RADIUS_M.
 
 parent(<<FaceDigits:1/binary, $-, Digits/binary>>) ->
     case byte_size(Digits) > 1 of
