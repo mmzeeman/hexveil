@@ -160,8 +160,9 @@ No per-row distance calculation needed.
 ### Using `disk/2` for Exact Results
 
 When you need exact circular coverage (e.g. the item is near a cell boundary and a
-single prefix would miss it), use `triveil:disk/2` which returns all cell codes within
-a given diameter:
+single prefix would miss it), use `triveil:disk/2` from the companion triangular-grid
+module (included in this repository) which returns all cell codes within a given
+diameter:
 
 ```erlang
 %% Get all cells within 1000 m of a location
