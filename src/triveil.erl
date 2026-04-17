@@ -70,7 +70,7 @@ disk_from_center(Center, Res, DiameterMeters) ->
     CenterCode = encode(Center, Res),
     RadiusMeters = DiameterMeters / 2.0,
     Visited0 = sets:add_element(CenterCode, sets:new([{version, 2}])),
-    lists:usort(disk_bfs(Center, RadiusMeters, [CenterCode], Visited0, [CenterCode])).
+    disk_bfs(Center, RadiusMeters, [CenterCode], Visited0, [CenterCode]).
 
 disk_bfs(_Center, _RadiusMeters, [], _Visited, Acc) ->
     Acc;
