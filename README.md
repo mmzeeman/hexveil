@@ -177,54 +177,67 @@ VisibilityCodes = triveil:disk({Lat, Lon}, Res, 1000).
 
 #### Storage Schema
 
-Store the visibility codes as an **array column** with a **GIN index**:
+Each item stores its location at a **fixed reference level** plus its visibility disk
+codes at that same level. All items and all queries use the **same level** so that
+code comparisons are meaningful. Choose one level for your application (e.g. L14 ≈
+485 m cells for ~500 m precision):
 
 ```sql
 CREATE TABLE items (
-    id           bigint PRIMARY KEY,
-    code         text NOT NULL,         -- full-resolution triveil code (L24)
-    visibility_codes text[] NOT NULL,   -- disk codes at optimal level
+    id               bigint PRIMARY KEY,
+    code             text NOT NULL,       -- item's triveil code at the reference level
+    visibility_codes text[] NOT NULL,     -- disk codes at the reference level
     ...
 );
 
--- GIN index for array containment queries (ANY/&&)
+-- GIN index for array overlap/containment queries
 CREATE INDEX idx_items_visibility ON items USING GIN (visibility_codes);
+```
 
--- Btree index for the item's own code
-CREATE INDEX idx_items_code ON items (code);
+```erlang
+%% Application-wide reference level (pick once, use everywhere)
+-define(REF_LEVEL, 14).   %% ~485 m cells
+
+%% At write time: item at {Lat, Lon}, visible within 1000 m
+Code = triveil:encode({Lat, Lon}, ?REF_LEVEL),
+VisibilityCodes = triveil:disk({Lat, Lon}, ?REF_LEVEL, 1000).
+%% Store: code = Code, visibility_codes = VisibilityCodes
 ```
 
 #### Query Pattern (Dual-Disk)
 
-At query time, the viewer also computes a search disk, then checks both directions:
+At query time, the viewer encodes their location and search disk at the **same
+reference level**, then checks overlap in both directions:
 
 ```erlang
 %% Viewer at {VLat, VLon}, searching within 2000 m
-ViewerRes = triveil:optimal_level(2000),
-SearchCodes = triveil:disk({VLat, VLon}, ViewerRes, 2000),
-ViewerCode = triveil:encode({VLat, VLon}, 24).
+ViewerCode = triveil:encode({VLat, VLon}, ?REF_LEVEL),
+SearchCodes = triveil:disk({VLat, VLon}, ?REF_LEVEL, 2000).
 ```
 
 ```sql
--- $1 = SearchCodes (viewer's search disk)
--- $2 = ViewerCode  (viewer's full-resolution code)
+-- $1 = SearchCodes  (viewer's search disk at REF_LEVEL)
+-- $2 = ViewerCode   (viewer's own code at REF_LEVEL)
 
 SELECT * FROM items
 WHERE code = ANY($1)                    -- item is in viewer's search area
   AND $2 = ANY(visibility_codes);       -- viewer is in item's visibility area
 ```
 
-**How it works:**
-- The first condition (`code = ANY($1)`) checks if the item's location falls within
-  any of the viewer's search-disk triangles — the GIN index on the array makes this fast.
-- The second condition (`$2 = ANY(visibility_codes)`) checks if the viewer's location
-  falls within the item's pre-computed visibility disk — respecting the item's own
-  visibility radius.
+Because all codes use the same reference level, direct equality works. The GIN index
+on `visibility_codes` makes the second condition fast.
 
-**Example:** Item B is visible within 500 m. Viewer A is 800 m away, searching
-within 2000 m. B falls inside A's search disk (first check passes), but A does *not*
-fall inside B's 500 m visibility disk (second check fails). B is correctly excluded —
-all without distance calculations.
+**How it works:**
+- `code = ANY($1)`: the item's location cell is one of the cells in the viewer's
+  search disk → the item is close enough to potentially be seen.
+- `$2 = ANY(visibility_codes)`: the viewer's location cell is one of the cells in
+  the item's visibility disk → the item *wants* to be seen by someone at the
+  viewer's location.
+
+**Example:** Item B is visible within 500 m (its `visibility_codes` covers ~500 m).
+Viewer A is 800 m away, searching within 2000 m. B's `code` is inside A's search
+disk (first check passes), but A's code is *not* in B's 500 m `visibility_codes`
+(second check fails). B is correctly excluded — with zero distance calculations.
 
 #### Visualizing a Disk
 
