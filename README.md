@@ -266,7 +266,7 @@ Res = triveil:optimal_level(1000).    %% => 13
 
 %% Generate the visibility disk at that level
 Codes = triveil:disk({Lat, Lon}, Res, 1000).
-%% => ~6 codes (minimal, circle approximated by a few triangles)
+%% => ~6 codes (gap-free circle coverage at optimal level)
 ```
 
 The table below shows how the code count grows as the level gets finer, for a
