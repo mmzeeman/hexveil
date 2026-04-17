@@ -266,7 +266,7 @@ Res = triveil:optimal_level(1000).    %% => 13
 
 %% Generate the visibility disk at that level
 Codes = triveil:disk({Lat, Lon}, Res, 1000).
-%% => ~2 codes (minimal, circle approximated by 2 triangles)
+%% => ~6 codes (minimal, circle approximated by a few triangles)
 ```
 
 The table below shows how the code count grows as the level gets finer, for a
@@ -274,15 +274,15 @@ visibility diameter of 1000 m (measured at Amsterdam, 52.37°N):
 
 | Level | Cell Diameter | Codes in disk(1000m) | Shape |
 | :--- | :--- | :--- | :--- |
-| **12** | ~1938 m | 1 | Single triangle (overshoots) |
-| **13** | ~969 m | 2 | ← **optimal** (fewest codes) |
-| **14** | ~485 m | 7 | Rough circle |
-| **15** | ~242 m | 31 | Smooth circle |
-| **16** | ~121 m | 129 | Very precise circle |
+| **12** | ~1938 m | 6 | Coarse coverage |
+| **13** | ~969 m | 6 | ← **optimal** (fewest codes) |
+| **14** | ~485 m | 19 | Rough circle |
+| **15** | ~242 m | 50 | Smooth circle |
+| **16** | ~121 m | 160 | Very precise circle |
 
 **Rule of thumb:** pick the level where `cell diameter ≈ visibility diameter`. That
-yields ~2–3 codes — the minimum needed to cover the circle. Going finer gives a
-rounder shape but with exponentially more codes to store and query.
+yields ~6 codes — enough to cover the circle with no gaps at the boundary. Going
+finer gives a rounder shape but with exponentially more codes to store and query.
 
 The full cell-diameter table for triveil:
 

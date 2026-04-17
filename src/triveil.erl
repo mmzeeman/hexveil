@@ -114,8 +114,7 @@ disk_bfs(Center, RadiusMeters, Queue0, Visited, Acc) ->
                             {Q0, V0, A0};
                         false ->
                             V1 = sets:add_element(NCode, V0),
-                            DistMeters = great_circle_distance(Center, decode(NCode)),
-                            case DistMeters =< RadiusMeters of
+                            case any_corner_within(Center, NCode, RadiusMeters) of
                                 true -> {queue:in(NCode, Q0), V1, [NCode | A0]};
                                 false -> {Q0, V1, A0}
                             end
@@ -126,6 +125,13 @@ disk_bfs(Center, RadiusMeters, Queue0, Visited, Acc) ->
             ),
             disk_bfs(Center, RadiusMeters, Queue2, Visited1, Acc1)
     end.
+
+%% @doc Check if any corner of the triangle is within the radius.
+any_corner_within(Center, Code, RadiusMeters) ->
+    Corners = cell_geometry(Code),
+    lists:any(fun(Corner) ->
+        great_circle_distance(Center, Corner) =< RadiusMeters
+    end, Corners).
 
 great_circle_distance(P1, P2) ->
     {X1, Y1, Z1} = to_xyz(P1),
