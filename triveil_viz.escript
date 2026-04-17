@@ -95,8 +95,7 @@ generate_viz(Lat, Lon, Res, MaybeDiam) ->
     CircleJs = case MaybeDiam of
         undefined -> "";
         D ->
-            Verts = triveil:cell_geometry(Code),
-            {OLat, OLon} = orthocenter(Verts),
+            {OLat, OLon} = triveil:orthocenter(Code),
             io_lib:format(
                 "L.circle([~f, ~f], {radius: ~f, color: '#e040e0', weight: 2, "
                 "dashArray: '6,4', fill: false, interactive: false}).addTo(map)"
@@ -153,17 +152,3 @@ to_json(Code, Color, Weight, Opacity) ->
     CoordJson = "[" ++ string:join([io_lib:format("[~f, ~f]", [La, Lo]) || {La, Lo} <- Coords], ",") ++ "]",
     io_lib:format("{\"code\": \"~s\", \"color\": \"~s\", \"weight\": ~p, \"opacity\": ~f, \"coords\": ~s}",
                   [Code, Color, Weight, float(Opacity), CoordJson]).
-
-%% Compute the orthocenter of a triangle given its three vertices in {Lat, Lon}.
-%% The orthocenter is the intersection of the altitudes.
-orthocenter([{A1,A2}, {B1,B2}, {C1,C2}]) ->
-    %% Altitude from A perpendicular to BC: (H-A)·(B-C) = 0
-    %% Altitude from B perpendicular to AC: (H-B)·(A-C) = 0
-    D1 = B1 - C1,  D2 = B2 - C2,   %% direction BC
-    E1 = A1 - C1,  E2 = A2 - C2,   %% direction AC
-    Rhs1 = A1 * D1 + A2 * D2,
-    Rhs2 = B1 * E1 + B2 * E2,
-    Det  = D1 * E2 - D2 * E1,
-    H1   = (Rhs1 * E2 - Rhs2 * D2) / Det,
-    H2   = (D1 * Rhs2 - E1 * Rhs1) / Det,
-    {H1, H2}.

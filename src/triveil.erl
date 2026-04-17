@@ -6,6 +6,7 @@
 -export([
     encode/2, encode/1,
     decode/1,
+    orthocenter/1,
     disk/2, disk/3,
     optimal_level/1,
     parent/1,
@@ -50,6 +51,16 @@ decode(<<FaceBin:1/binary, $-, DigitsBin/binary>>) ->
     
     %% Unproject using the same hexveil logic
     XYZ = unproject({CX, CY}, FaceIdx),
+    from_xyz(XYZ).
+
+%% @doc Return the orthocenter of the triangle identified by Code as {Lat, Lon}.
+%% The orthocenter is the intersection of the triangle's three altitudes.
+orthocenter(<<FaceBin:1/binary, $-, DigitsBin/binary>>) ->
+    FaceIdx = binary_to_integer(FaceBin, ?NR_FACES),
+    {V1, V2, V3} = face_verts_2d(FaceIdx),
+    {RV1, RV2, RV3} = sub_decode(DigitsBin, V1, V2, V3),
+    {OX, OY} = orthocenter_2d(RV1, RV2, RV3),
+    XYZ = unproject({OX, OY}, FaceIdx),
     from_xyz(XYZ).
 
 disk(Code, DiameterMeters) when is_binary(Code), is_number(DiameterMeters), DiameterMeters >= 0 ->
@@ -97,11 +108,11 @@ optimal_level(DiameterMeters) when is_number(DiameterMeters), DiameterMeters > 0
 
 disk_from_center(Center, Res, DiameterMeters) ->
     CenterCode = encode(Center, Res),
-    %% Use the parent triangle's centroid as the disk center for privacy:
+    %% Use the parent triangle's orthocenter as the disk center for privacy:
     %% all users within the same parent cell produce identical disks,
     %% preventing exact location recovery from the set of codes.
     ParentCode = parent(CenterCode),
-    PrivacyCenter = decode(ParentCode),
+    PrivacyCenter = orthocenter(ParentCode),
     RadiusMeters = DiameterMeters / 2.0,
     Visited0 = sets:add_element(CenterCode, sets:new([{version, 2}])),
     Queue0 = queue:from_list([CenterCode]),
@@ -268,6 +279,20 @@ barycentric_2d({Px,Py}, {V1x,V1y}, {V2x,V2y}, {V3x,V3y}) ->
 
 mid_2d({X1,Y1}, {X2,Y2}) ->
     {(X1+X2)/2.0, (Y1+Y2)/2.0}.
+
+%% @doc Compute the orthocenter of a triangle in 2D.
+%% The orthocenter is the intersection of the altitudes.
+orthocenter_2d({A1,A2}, {B1,B2}, {C1,C2}) ->
+    %% Altitude from A perpendicular to BC: (H-A)·(B-C) = 0
+    %% Altitude from B perpendicular to AC: (H-B)·(A-C) = 0
+    D1 = B1 - C1,  D2 = B2 - C2,   %% direction BC
+    E1 = A1 - C1,  E2 = A2 - C2,   %% direction AC
+    Rhs1 = A1 * D1 + A2 * D2,
+    Rhs2 = B1 * E1 + B2 * E2,
+    Det  = D1 * E2 - D2 * E1,
+    H1   = (Rhs1 * E2 - Rhs2 * D2) / Det,
+    H2   = (D1 * Rhs2 - E1 * Rhs1) / Det,
+    {H1, H2}.
 
 %% --- Standard Geometry ---
 
