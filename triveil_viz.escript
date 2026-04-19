@@ -91,16 +91,16 @@ generate_viz(Lat, Lon, Res, MaybeDiam) ->
         ".bindPopup('Exact location: ~f, ~f');~n",
         [Lat, Lon, Lat, Lon]),
 
-    %% Reference circle centered on the orthocenter of the code triangle
-    %% (matches the disk center used by the disk computation)
+    %% Reference circle centered on the privacy center (level-15 orthocenter)
+    %% This matches the disk center used by triveil:disk/3
     CircleJs = case MaybeDiam of
         undefined -> "";
         D ->
-            {OLat, OLon} = triveil:orthocenter(Code),
+            {OLat, OLon} = triveil:disk_center({Lat, Lon}),
             io_lib:format(
                 "L.circle([~f, ~f], {radius: ~f, color: '#e040e0', weight: 2, "
                 "dashArray: '6,4', fill: false, interactive: false}).addTo(map)"
-                ".bindPopup('Reference circle: ~f m diameter (centered on orthocenter)');~n",
+                ".bindPopup('Reference circle: ~f m diameter (centered on privacy center)');~n",
                 [OLat, OLon, D / 2.0, D])
     end,
 

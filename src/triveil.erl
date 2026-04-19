@@ -8,6 +8,7 @@
     decode/1,
     orthocenter/1,
     disk/2, disk/3,
+    disk_center/1,
     optimal_level/1,
     parent/1,
     cell_geometry/1,
@@ -22,6 +23,7 @@
 -define(DEFAULT_RES, 7).
 -define(EARTH_RADIUS_M, 6371000.0).
 -define(NR_FACES, 20).
+-define(PRIVACY_CENTER_RES, 15).
 
 encode(Coord) ->
     encode(Coord, ?DEFAULT_RES).
@@ -106,15 +108,25 @@ optimal_level(DiameterMeters) when is_number(DiameterMeters), DiameterMeters > 0
     Level = round(math:log2(BaseDiameter / DiameterMeters)) + 1,
     max(1, min(24, Level)).
 
+%% @doc Return the privacy-preserving center point for a location.
+%% This is the orthocenter of the enclosing triangle at the fixed
+%% privacy resolution (level 15). Using a fixed resolution ensures
+%% the center does not shift when the disk resolution changes.
+-spec disk_center({Lat :: float(), Lon :: float()}) -> {float(), float()}.
+disk_center({Lat, Lon}) ->
+    PrivacyCode = encode({Lat, Lon}, ?PRIVACY_CENTER_RES),
+    orthocenter(PrivacyCode).
+
 disk_from_center(Center, Res, DiameterMeters) ->
-    CenterCode = encode(Center, Res),
-    %% Use the cell triangle's orthocenter as the disk center so the
-    %% circle is centered on the cell the user is in.
-    DiskCenter = orthocenter(CenterCode),
+    %% Center of the disk is always computed at the fixed privacy
+    %% resolution so that the circle does not shift when the user
+    %% changes the disk resolution.
+    DiskCenter = disk_center(Center),
+    StartCode = encode(Center, Res),
     RadiusMeters = DiameterMeters / 2.0,
-    Visited0 = sets:from_list([CenterCode], [{version, 2}]),
-    Queue0 = queue:from_list([CenterCode]),
-    disk_bfs(DiskCenter, RadiusMeters, Queue0, Visited0, [CenterCode]).
+    Visited0 = sets:from_list([StartCode], [{version, 2}]),
+    Queue0 = queue:from_list([StartCode]),
+    disk_bfs(DiskCenter, RadiusMeters, Queue0, Visited0, [StartCode]).
 
 disk_bfs(Center, RadiusMeters, Queue0, Visited, Acc) ->
     case queue:out(Queue0) of
