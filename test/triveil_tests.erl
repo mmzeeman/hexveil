@@ -73,3 +73,83 @@ neighbor_consistency_test() ->
                 ?assert(false)
         end
     end, N1).
+
+%% optimal_level returns a level whose cell diameter closely matches the target
+optimal_level_test() ->
+    %% Empirical cell diameters (at Amsterdam):
+    %%   L13 ≈  969 m, L14 ≈ 485 m, L16 ≈ 121 m
+    ?assertEqual(13, triveil:optimal_level(1000)),
+    ?assertEqual(14, triveil:optimal_level(500)),
+    ?assertEqual(16, triveil:optimal_level(100)).
+
+%% optimal_level clamps to valid range
+optimal_level_clamp_test() ->
+    ?assertEqual(1,  triveil:optimal_level(100000000)),  %% huge → level 1
+    ?assertEqual(24, triveil:optimal_level(0.001)).      %% tiny → level 24
+
+%% optimal_level result can be used directly with disk/3
+optimal_level_disk_integration_test() ->
+    Diameter = 1000,
+    Res = triveil:optimal_level(Diameter),
+    Codes = triveil:disk({52.3676, 4.9041}, Res, Diameter),
+    %% At optimal level, disk should return a small number of codes (1-4)
+    ?assert(length(Codes) >= 1 andalso length(Codes) =< 10,
+            io_lib:format("Expected 1-10 codes at optimal level ~B, got ~B", [Res, length(Codes)])).
+
+%% disk_center returns the same point regardless of which resolution
+%% the caller intends to use for disk tiles
+disk_center_stable_test() ->
+    Loc = {52.37456, 4.87249},
+    Center = triveil:disk_center(Loc),
+    ?assert(is_tuple(Center)),
+    {CLat, CLon} = Center,
+    ?assert(is_float(CLat)),
+    ?assert(is_float(CLon)),
+    %% Center should be near the input location (within ~1 km at level 15)
+    Dist = great_circle_m(Loc, Center),
+    ?assert(Dist < 1000.0,
+            io_lib:format("Privacy center too far from input: ~f m", [Dist])).
+
+%% Two different points in the same level-15 cell should get the same center
+disk_center_same_cell_test() ->
+    %% Two nearby points that should fall in the same level-15 triangle
+    Loc1 = {52.37456, 4.87249},
+    Loc2 = {52.37457, 4.87250},
+    C1 = triveil:disk_center(Loc1),
+    C2 = triveil:disk_center(Loc2),
+    ?assertEqual(C1, C2).
+
+%% disk/4 with centroid mode returns a subset of corner mode
+disk_mode_centroid_subset_test() ->
+    Loc = {52.3676, 4.9041},
+    Res = 13,
+    Diam = 1000,
+    CornerCodes = lists:sort(triveil:disk(Loc, Res, Diam, corner)),
+    CentroidCodes = lists:sort(triveil:disk(Loc, Res, Diam, centroid)),
+    %% centroid mode should return fewer (or equal) codes
+    ?assert(length(CentroidCodes) =< length(CornerCodes),
+            io_lib:format("centroid (~B) should be <= corner (~B)",
+                          [length(CentroidCodes), length(CornerCodes)])),
+    %% every centroid code should also appear in corner codes
+    lists:foreach(fun(C) ->
+        ?assert(lists:member(C, CornerCodes),
+                io_lib:format("centroid code ~s not in corner set", [C]))
+    end, CentroidCodes).
+
+%% disk/3 (no mode) should behave like corner mode
+disk_default_mode_test() ->
+    Loc = {52.3676, 4.9041},
+    Res = 13,
+    Diam = 1000,
+    Default = lists:sort(triveil:disk(Loc, Res, Diam)),
+    Corner = lists:sort(triveil:disk(Loc, Res, Diam, corner)),
+    ?assertEqual(Default, Corner).
+
+great_circle_m({Lat1, Lon1}, {Lat2, Lon2}) ->
+    D2R = 0.017453292519943295,
+    Lo1 = Lon1 * D2R, La1 = Lat1 * D2R,
+    Lo2 = Lon2 * D2R, La2 = Lat2 * D2R,
+    X1 = math:cos(La1)*math:cos(Lo1), Y1 = math:cos(La1)*math:sin(Lo1), Z1 = math:sin(La1),
+    X2 = math:cos(La2)*math:cos(Lo2), Y2 = math:cos(La2)*math:sin(Lo2), Z2 = math:sin(La2),
+    Dot = max(-1.0, min(1.0, X1*X2 + Y1*Y2 + Z1*Z2)),
+    math:acos(Dot) * 6371000.0.

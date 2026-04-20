@@ -6,6 +6,10 @@
 -export([
     encode/2, encode/1,
     decode/1,
+    orthocenter/1,
+    disk/2, disk/3, disk/4,
+    disk_center/1,
+    optimal_level/1,
     parent/1,
     cell_geometry/1,
     neighbors/1,
@@ -13,13 +17,19 @@
     from_xyz/1
 ]).
 
+-type disk_mode() :: corner | centroid.
+-export_type([disk_mode/0]).
+
 -on_load(init_persistent_terms/0).
 
 -define(D2R, 0.017453292519943295).
+-define(DEFAULT_RES, 7).
+-define(EARTH_RADIUS_M, 6371000.0).
 -define(NR_FACES, 20).
+-define(PRIVACY_CENTER_RES, 15).
 
 encode(Coord) ->
-    encode(Coord, 7).
+    encode(Coord, ?DEFAULT_RES).
 
 encode({Lat, Lon}, Res) when Res >= 1, Res =< 24 ->
     XYZ = to_xyz({Lat, Lon}),
@@ -47,6 +57,155 @@ decode(<<FaceBin:1/binary, $-, DigitsBin/binary>>) ->
     %% Unproject using the same hexveil logic
     XYZ = unproject({CX, CY}, FaceIdx),
     from_xyz(XYZ).
+
+%% @doc Return the orthocenter of the triangle identified by Code as {Lat, Lon}.
+%% The orthocenter is the intersection of the triangle's three altitudes.
+orthocenter(<<FaceBin:1/binary, $-, DigitsBin/binary>>) ->
+    FaceIdx = binary_to_integer(FaceBin, ?NR_FACES),
+    {V1, V2, V3} = face_verts_2d(FaceIdx),
+    {RV1, RV2, RV3} = sub_decode(DigitsBin, V1, V2, V3),
+    {OX, OY} = orthocenter_2d(RV1, RV2, RV3),
+    XYZ = unproject({OX, OY}, FaceIdx),
+    from_xyz(XYZ).
+
+disk(Code, DiameterMeters) when is_binary(Code), is_number(DiameterMeters), DiameterMeters >= 0 ->
+    case binary:split(Code, <<"-">>) of
+        [_, Digits] when byte_size(Digits) > 0 ->
+            try decode(Code) of
+                {Lat, Lon} ->
+                    Res = byte_size(Digits),
+                    disk_from_center({Lat, Lon}, Res, DiameterMeters, corner)
+            catch
+                _:_ ->
+                    erlang:error(badarg)
+            end;
+        _ ->
+            erlang:error(badarg)
+    end;
+disk({Lat, Lon}, DiameterMeters) when is_number(Lat), is_number(Lon), is_number(DiameterMeters), DiameterMeters >= 0 ->
+    disk({Lat, Lon}, ?DEFAULT_RES, DiameterMeters).
+
+disk({Lat, Lon}, Res, DiameterMeters)
+  when is_number(Lat), is_number(Lon), is_integer(Res), Res > 0, is_number(DiameterMeters), DiameterMeters >= 0 ->
+    disk_from_center({Lat, Lon}, Res, DiameterMeters, corner).
+
+%% @doc Like `disk/3' but with a mode option to control how triangles are
+%% selected for inclusion in the disk.
+%%
+%% Mode can be:
+%%   `corner'   – include the triangle when at least one corner OR its
+%%                centroid falls within the radius (default, gives a
+%%                slightly larger coverage).
+%%   `centroid' – include the triangle only when its centroid falls
+%%                within the radius (tighter fit).
+-spec disk({Lat :: float(), Lon :: float()}, Res :: pos_integer(),
+           DiameterMeters :: number(), Mode :: disk_mode()) -> [binary()].
+disk({Lat, Lon}, Res, DiameterMeters, Mode)
+  when is_number(Lat), is_number(Lon), is_integer(Res), Res > 0,
+       is_number(DiameterMeters), DiameterMeters >= 0,
+       (Mode =:= corner orelse Mode =:= centroid) ->
+    disk_from_center({Lat, Lon}, Res, DiameterMeters, Mode).
+
+%% @doc Return the resolution level whose triangular cells best match the
+%% given diameter in meters. At this level, `disk/3' returns the fewest
+%% codes while still approximating a circle of that diameter.
+%%
+%% The triangular cell diameter halves with each level (aperture 4).
+%% At level 1, cell diameter is approximately 4,000 km.
+%%
+%% Example:
+%%   triveil:optimal_level(1000).   %% => 13  (cell ≈ 969 m)
+%%   triveil:optimal_level(500).    %% => 14  (cell ≈ 485 m)
+%%   triveil:optimal_level(100).    %% => 16  (cell ≈ 121 m)
+-spec optimal_level(DiameterMeters :: number()) -> 1..24.
+optimal_level(DiameterMeters) when is_number(DiameterMeters), DiameterMeters > 0 ->
+    %% Cell diameter at level 1 ≈ 4,003,017 m (empirically measured
+    %% as the circumdiameter of a level-1 triangle at mid-latitudes).
+    %% Each subsequent level halves the cell diameter (aperture 4).
+    %%
+    %% Level = round(log2(BaseDiameter / DiameterMeters)) + 1
+    BaseDiameter = 4003017.0,
+    Level = round(math:log2(BaseDiameter / DiameterMeters)) + 1,
+    max(1, min(24, Level)).
+
+%% @doc Return the privacy-preserving center point for a location.
+%% This is the orthocenter of the enclosing triangle at the fixed
+%% privacy resolution (level 15). Using a fixed resolution ensures
+%% the center does not shift when the disk resolution changes.
+-spec disk_center({Lat :: float(), Lon :: float()}) -> {float(), float()}.
+disk_center({Lat, Lon}) ->
+    PrivacyCode = encode({Lat, Lon}, ?PRIVACY_CENTER_RES),
+    orthocenter(PrivacyCode).
+
+disk_from_center(Center, Res, DiameterMeters, Mode) ->
+    %% Center of the disk is always computed at the fixed privacy
+    %% resolution so that the circle does not shift when the user
+    %% changes the disk resolution.
+    DiskCenter = disk_center(Center),
+    StartCode = encode(Center, Res),
+    RadiusMeters = DiameterMeters / 2.0,
+    Visited0 = sets:from_list([StartCode], [{version, 2}]),
+    Queue0 = queue:from_list([StartCode]),
+    disk_bfs(DiskCenter, RadiusMeters, Mode, Queue0, Visited0, [StartCode]).
+
+disk_bfs(Center, RadiusMeters, Mode, Queue0, Visited, Acc) ->
+    case queue:out(Queue0) of
+        {empty, _} ->
+            Acc;
+        {{value, Code}, Queue1} ->
+            {Queue2, Visited1, Acc1} = lists:foldl(
+                fun(NCode, {Q0, V0, A0}) ->
+                    case sets:is_element(NCode, V0) of
+                        true ->
+                            {Q0, V0, A0};
+                        false ->
+                            V1 = sets:add_element(NCode, V0),
+                            case within(Center, NCode, RadiusMeters, Mode) of
+                                true -> {queue:in(NCode, Q0), V1, [NCode | A0]};
+                                false -> {Q0, V1, A0}
+                            end
+                    end
+                end,
+                {Queue1, Visited, Acc},
+                neighbors(Code)
+            ),
+            disk_bfs(Center, RadiusMeters, Mode, Queue2, Visited1, Acc1)
+    end.
+
+%% @doc Check if a triangle should be included in the disk.
+%% In `corner' mode a triangle is included when any corner OR the centroid
+%% falls within the radius.  In `centroid' mode only the centroid is checked.
+within(Center, Code, RadiusMeters, corner) ->
+    any_corner_within(Center, Code, RadiusMeters);
+within(Center, Code, RadiusMeters, centroid) ->
+    centroid_within(Center, Code, RadiusMeters).
+
+%% @doc Check if the triangle overlaps the disk.
+%% A triangle overlaps when any corner OR the centroid is within the radius.
+%% Checking only corners misses cells whose centroid is inside the disk but
+%% whose corners are all outside (common when cells are large relative to the disk).
+any_corner_within(Center, Code, RadiusMeters) ->
+    Corners = cell_geometry(Code),
+    lists:any(fun(Corner) ->
+        great_circle_distance(Center, Corner) =< RadiusMeters
+    end, Corners)
+    orelse
+    centroid_within(Center, Code, RadiusMeters).
+
+%% @doc Check if the triangle's centroid is within the disk.
+centroid_within(Center, Code, RadiusMeters) ->
+    great_circle_distance(Center, decode(Code)) =< RadiusMeters.
+
+great_circle_distance(P1, P2) ->
+    {X1, Y1, Z1} = to_xyz(P1),
+    {X2, Y2, Z2} = to_xyz(P2),
+    Dot0 = X1*X2 + Y1*Y2 + Z1*Z2,
+    Dot = if
+        Dot0 > 1.0 -> 1.0;
+        Dot0 < -1.0 -> -1.0;
+        true -> Dot0
+    end,
+    math:acos(Dot) * ?EARTH_RADIUS_M.
 
 parent(<<FaceDigits:1/binary, $-, Digits/binary>>) ->
     case byte_size(Digits) > 1 of
@@ -167,6 +326,20 @@ barycentric_2d({Px,Py}, {V1x,V1y}, {V2x,V2y}, {V3x,V3y}) ->
 
 mid_2d({X1,Y1}, {X2,Y2}) ->
     {(X1+X2)/2.0, (Y1+Y2)/2.0}.
+
+%% @doc Compute the orthocenter of a triangle in 2D.
+%% The orthocenter is the intersection of the altitudes.
+orthocenter_2d({A1,A2}, {B1,B2}, {C1,C2}) ->
+    %% Altitude from A perpendicular to BC: (H-A)·(B-C) = 0
+    %% Altitude from B perpendicular to AC: (H-B)·(A-C) = 0
+    D1 = B1 - C1,  D2 = B2 - C2,   %% direction BC
+    E1 = A1 - C1,  E2 = A2 - C2,   %% direction AC
+    Rhs1 = A1 * D1 + A2 * D2,
+    Rhs2 = B1 * E1 + B2 * E2,
+    Det  = D1 * E2 - D2 * E1,
+    H1   = (Rhs1 * E2 - Rhs2 * D2) / Det,
+    H2   = (D1 * Rhs2 - E1 * Rhs1) / Det,
+    {H1, H2}.
 
 %% --- Standard Geometry ---
 

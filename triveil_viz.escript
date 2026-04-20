@@ -7,21 +7,63 @@ main([LatStr, LonStr, ResStr]) ->
         Lon = parse_float(LonStr),
         Res = list_to_integer(ResStr),
         io:format("Generating visualization for ~f, ~f at res ~p...~n", [Lat, Lon, Res]),
-        generate_viz(Lat, Lon, Res)
+        generate_viz(Lat, Lon, Res, undefined, corner)
+    catch
+        E:R:S ->
+            io:format("Error: ~p:~p~n~p~n", [E, R, S])
+    end;
+main([LatStr, LonStr, ResStr, DiamStr]) ->
+    try
+        Lat = parse_float(LatStr),
+        Lon = parse_float(LonStr),
+        Res = list_to_integer(ResStr),
+        Diam = parse_float(DiamStr),
+        io:format("Generating visualization for ~f, ~f at res ~p with ~f m disk (corner mode)...~n",
+                  [Lat, Lon, Res, Diam]),
+        generate_viz(Lat, Lon, Res, Diam, corner)
+    catch
+        E:R:S ->
+            io:format("Error: ~p:~p~n~p~n", [E, R, S])
+    end;
+main([LatStr, LonStr, ResStr, DiamStr, ModeStr]) ->
+    try
+        Lat = parse_float(LatStr),
+        Lon = parse_float(LonStr),
+        Res = list_to_integer(ResStr),
+        Diam = parse_float(DiamStr),
+        Mode = parse_mode(ModeStr),
+        io:format("Generating visualization for ~f, ~f at res ~p with ~f m disk (~s mode)...~n",
+                  [Lat, Lon, Res, Diam, ModeStr]),
+        generate_viz(Lat, Lon, Res, Diam, Mode)
     catch
         E:R:S ->
             io:format("Error: ~p:~p~n~p~n", [E, R, S])
     end;
 main(_) ->
-    io:format("Usage: ./triveil_viz.escript <lat> <lon> <res>~n"),
-    io:format("Example: ./triveil_viz.escript 52.3676 4.9041 10~n").
+    io:format("Usage: ./triveil_viz.escript <lat> <lon> <res> [diameter_m] [mode]~n"),
+    io:format("~n"),
+    io:format("  mode: corner   - include triangle if at least one corner is within the disk (default)~n"),
+    io:format("        centroid - include triangle only if its centroid is within the disk~n"),
+    io:format("~n"),
+    io:format("Examples:~n"),
+    io:format("  ./triveil_viz.escript 52.3676 4.9041 10~n"),
+    io:format("  ./triveil_viz.escript 52.3676 4.9041 13 1000~n"),
+    io:format("  ./triveil_viz.escript 52.3676 4.9041 13 1000 centroid~n"),
+    io:format("~n"),
+    io:format("When diameter_m is given, the visualization shows the disk of~n"),
+    io:format("triangular cells that approximate a circle of that diameter.~n"),
+    io:format("Use triveil:optimal_level/1 to find the best resolution.~n").
 
 parse_float(S) ->
     try list_to_float(S)
     catch error:badarg -> float(list_to_integer(S))
     end.
 
-generate_viz(Lat, Lon, Res) ->
+parse_mode("corner") -> corner;
+parse_mode("centroid") -> centroid;
+parse_mode(Other) -> erlang:error({bad_mode, Other}).
+
+generate_viz(Lat, Lon, Res, MaybeDiam, Mode) ->
     Code = triveil:encode({Lat, Lon}, Res),
     Parent = triveil:parent(Code),
     GrandParent = triveil:parent(Parent),
@@ -30,7 +72,8 @@ generate_viz(Lat, Lon, Res) ->
     N1 = triveil:neighbors(Code),
     N2 = triveil:neighbors_2(Code),
     
-    Data = [
+    %% Base layers: hierarchy + neighbors
+    BaseData = [
         to_json(GrandParent, "cyan", 5, 0.02),
         to_json(Parent, "red", 3, 0.05)
     ] ++ 
@@ -38,7 +81,53 @@ generate_viz(Lat, Lon, Res) ->
     [to_json(S, "orange", 1.5, 0.1) || S <- N1] ++
     [to_json(S, "green", 1, 0.2) || S <- Siblings] ++
     [to_json(Code, "blue", 3, 0.4)],
-    
+
+    %% Optional disk layer
+    {DiskData, DiskInfo} = case MaybeDiam of
+        undefined -> {[], ""};
+        Diam ->
+            DiskCodes = triveil:disk({Lat, Lon}, Res, Diam, Mode),
+            ModeStr = atom_to_list(Mode),
+            io:format("Disk contains ~p codes at level ~p~n", [length(DiskCodes), Res]),
+            DLayer = [to_json(DC, "#e040e0", 1, 0.35) || DC <- DiskCodes],
+            Info = io_lib:format(
+                "<div style='position:absolute;top:10px;right:10px;z-index:1000;"
+                "background:white;padding:12px;border-radius:6px;box-shadow:0 2px 6px rgba(0,0,0,0.3);"
+                "font-family:monospace;font-size:13px;'>"
+                "<b>Visibility Disk</b><br>"
+                "Diameter: ~f m<br>"
+                "Level: ~p<br>"
+                "Codes: ~p<br>"
+                "Mode: ~s<br>"
+                "Optimal level: ~p"
+                "</div>",
+                [Diam, Res, length(DiskCodes), ModeStr, triveil:optimal_level(Diam)]),
+            {DLayer, Info}
+    end,
+
+    %% Disk codes drawn first (below), then hierarchy on top
+    Data = DiskData ++ BaseData,
+
+    %% Red dot at the exact user location
+    RedDotJs = io_lib:format(
+        "L.circleMarker([~f, ~f], {radius: 5, color: 'red', fillColor: 'red', "
+        "fillOpacity: 1.0, weight: 1, interactive: true}).addTo(map)"
+        ".bindPopup('Exact location: ~f, ~f');~n",
+        [Lat, Lon, Lat, Lon]),
+
+    %% Reference circle centered on the privacy center (level-15 orthocenter)
+    %% This matches the disk center used by triveil:disk/3
+    CircleJs = case MaybeDiam of
+        undefined -> "";
+        D ->
+            {OLat, OLon} = triveil:disk_center({Lat, Lon}),
+            io_lib:format(
+                "L.circle([~f, ~f], {radius: ~f, color: '#e040e0', weight: 2, "
+                "dashArray: '6,4', fill: false, interactive: false}).addTo(map)"
+                ".bindPopup('Reference circle: ~f m diameter (centered on privacy center)');~n",
+                [OLat, OLon, D / 2.0, D])
+    end,
+
     Html = io_lib:format("
 <!DOCTYPE html>
 <html><head>
@@ -50,6 +139,7 @@ generate_viz(Lat, Lon, Res) ->
 </style>
 </head>
 <body>
+~s
 <div id=\"map\"></div>
 <script>
 var map = L.map(\"map\").setView([~f, ~f], 15);
@@ -75,7 +165,9 @@ data.forEach(d => {
         })
     }).addTo(map);
 });
-</script></body></html>", [Lat, Lon, string:join(Data, ",")]),
+~s
+~s
+</script></body></html>", [DiskInfo, Lat, Lon, string:join(Data, ","), CircleJs, RedDotJs]),
     
     file:write_file("triveil_viz.html", Html),
     io:format("Generated triveil_viz.html~n").
