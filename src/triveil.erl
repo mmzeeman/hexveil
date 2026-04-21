@@ -23,10 +23,10 @@
 -on_load(init_persistent_terms/0).
 
 -define(D2R, 0.017453292519943295).
--define(DEFAULT_RES, 7).
+-define(DEFAULT_RES, 14).
 -define(EARTH_RADIUS_M, 6371000.0).
 -define(NR_FACES, 20).
--define(PRIVACY_CENTER_RES, 15).
+-define(PRIVACY_CENTER_RES, 14).
 
 encode(Coord) ->
     encode(Coord, ?DEFAULT_RES).
