@@ -137,7 +137,7 @@ AllNeighbors = ambit:neighbors_2(Code).
 | ![Edge Neighbors](docs/neighbors.svg) | ![All Neighbors](docs/neighbors_2.svg) |
 
 #### Map Context
-To see how these cells align with real-world features, here is an overlay of a cell and its 12 neighbors over a stylized map of Amsterdam:
+To see how these cells align with real-world features, here is an overlay of a cell and its 12 neighbors over OpenStreetMap (Amsterdam Leidseplein):
 
 ![Map Overlay](docs/map_overlay.svg)
 
